@@ -104,7 +104,7 @@ describe('advisor', () => {
     const state = fresh();
     const lab = state.labs.helios;
     lab.cash = 100_000;
-    lab.run = { id: 'r', codename: 'X', modelName: 'HELIOS-2', targetFlop: 1e27, doneFlop: 0, startedWeek: 0, chips: 6000, estCapability: 30, costPaid: 0 };
+    lab.run = { id: 'r', codename: 'X', modelName: 'HELIOS-2', targetFlop: 1e27, doneFlop: 0, startedWeek: 0, chips: 6000, estCapability: 30, costTotal: 0, costPaid: 0 };
     const hint = suggestAction(state)!;
     expect(hint.id.startsWith('research-')).toBe(true);
     expect(hint.tab).toBe('research');
@@ -114,7 +114,7 @@ describe('advisor', () => {
     const state = fresh();
     const lab = state.labs.helios;
     lab.cash = 100_000;
-    lab.run = { id: 'r', codename: 'X', modelName: 'HELIOS-2', targetFlop: 1e27, doneFlop: 0, startedWeek: 0, chips: 6000, estCapability: 30, costPaid: 0 };
+    lab.run = { id: 'r', codename: 'X', modelName: 'HELIOS-2', targetFlop: 1e27, doneFlop: 0, startedWeek: 0, chips: 6000, estCapability: 30, costTotal: 0, costPaid: 0 };
     lab.research.active = [
       { nodeId: 'constitutional', weeksDone: 0, totalWeeks: 5 },
       { nodeId: 'evals-redteam', weeksDone: 0, totalWeeks: 5 },
@@ -176,7 +176,7 @@ describe('advisor', () => {
     const state = fresh();
     const lab = state.labs.helios;
     lab.cash = 100_000;
-    lab.run = { id: 'r', codename: 'X', modelName: 'HELIOS-2', targetFlop: 1e27, doneFlop: 0, startedWeek: 0, chips: 6000, estCapability: 30, costPaid: 0 };
+    lab.run = { id: 'r', codename: 'X', modelName: 'HELIOS-2', targetFlop: 1e27, doneFlop: 0, startedWeek: 0, chips: 6000, estCapability: 30, costTotal: 0, costPaid: 0 };
     lab.research.active = [
       { nodeId: 'constitutional', weeksDone: 0, totalWeeks: 5 },
       { nodeId: 'evals-redteam', weeksDone: 0, totalWeeks: 5 },

@@ -11,6 +11,7 @@ import {
   narrowBand,
   rebalanceAllocations,
   rsiTick,
+  settleRunPayment,
   shiftAlignment,
   widenBand,
   winProbability,
@@ -47,13 +48,16 @@ export function advanceWeek(state: GameState): void {
   endgameChecks(state);
   if (state.gameOver) return;
 
-  // govt ladder first; the random dice only roll on weeks the govt stays quiet
-  const govEvent = rollGovLadder(state);
-  if (govEvent) {
-    state.pendingEvents.push(govEvent);
-  } else {
-    const event = rollEvent(state);
-    if (event) state.pendingEvents.push(event);
+  // govt ladder first; the random dice only roll on weeks the govt stays quiet.
+  // Tutorial games get a quiet world — the scripted tour must not be interrupted.
+  if (!state.tutorial) {
+    const govEvent = rollGovLadder(state);
+    if (govEvent) {
+      state.pendingEvents.push(govEvent);
+    } else {
+      const event = rollEvent(state);
+      if (event) state.pendingEvents.push(event);
+    }
   }
 
   snapshotHistory(state);
@@ -92,10 +96,14 @@ function labTick(state: GameState, lab: Lab, demand: Record<string, number>): vo
   }
 
   // ---- training run progress
+  let trainSpend = 0;
   if (lab.run) {
     const regsDrag = lab.bindingRegulations && lab.run.chips >= BAL.BINDING_REGS_CHIP_MIN ? 1 - BAL.BINDING_REGS_SLOWDOWN : 1;
     const flopThisWeek = lab.run.chips * lab.chipEfficiency * BAL.FLOP_PER_CHIP_WEEK * mods.trainSpeedMult * (1 - lab.regulationDrag) * regsDrag;
     lab.run.doneFlop += flopThisWeek;
+    // pay-as-you-burn: the deferred share of the run cost follows FLOP progress
+    trainSpend = settleRunPayment(lab.run);
+    lab.cash -= trainSpend;
     if (lab.run.doneFlop >= lab.run.targetFlop) {
       const model = finishTrainingRun(lab, lab.run, state.week, state.world.algoProgress, state.rng, false);
       lab.models.push(model);
@@ -103,7 +111,9 @@ function labTick(state: GameState, lab: Lab, demand: Record<string, number>): vo
       lab.run = null;
       rebalanceAllocations(lab); // committed chips flow back to inference
       if (isPlayer) {
-        pushFeed(state, 'warning', `Training complete — ${model.name}`, `Run ${codename} finished. Capability ${model.capability.toFixed(1)}, alignment est. ${model.alignmentLo.toFixed(0)}–${model.alignmentHi.toFixed(0)}, robustness ${model.robustness.toFixed(0)}. It sits in the vault until you promote it.`, { goto: 'models', notice: true });
+        // the fresh model takes over immediately; the vault keeps the old flagship for a manual switch back
+        lab.flagshipId = model.id;
+        pushFeed(state, 'warning', `Training complete — ${model.name}`, `Run ${codename} finished. Capability ${model.capability.toFixed(1)}, alignment est. ${model.alignmentLo.toFixed(0)}–${model.alignmentHi.toFixed(0)}, robustness ${model.robustness.toFixed(0)}. It has been promoted to flagship — the previous model stays in the vault if you want to switch back.`, { goto: 'models', notice: true });
       } else {
         // rivals promote automatically if it's an upgrade
         const current = flagship(lab);
@@ -131,10 +141,10 @@ function labTick(state: GameState, lab: Lab, demand: Record<string, number>): vo
   rsiTick(lab);
   alignmentWorkTick(lab);
 
-  // ---- economy
+  // ---- economy (training payments count toward burn so runway/raises see them)
   const pnl = weeklyPnl(state, lab, demand);
   lab.weeklyRevenue = pnl.revenue;
-  lab.weeklyCosts = pnl.costs;
+  lab.weeklyCosts = pnl.costs + trainSpend;
   lab.licensesServed = pnl.licensesServed;
   lab.cash += pnl.net;
   for (const suit of [...lab.lawsuits]) {
@@ -284,10 +294,10 @@ function applyResearchCompletion(state: GameState, lab: Lab, nodeId: string): vo
   switch (nodeId) {
     // ---- capabilities (one-shot bumps; multipliers handled in labMods / new-model bakes)
     case 'chain-of-thought':
-      if (m) m.capability += 2;
+      if (m) m.capability = Math.min(BAL.ASI_CAPABILITY, m.capability + 2);
       break;
     case 'test-time-compute':
-      if (m) m.capability += 3;
+      if (m) m.capability = Math.min(BAL.ASI_CAPABILITY, m.capability + 3);
       break;
     case 'instruction-tuning':
       addAdopt(6);
@@ -314,7 +324,7 @@ function applyResearchCompletion(state: GameState, lab: Lab, nodeId: string): vo
       break;
     case 'arch-redesign':
       if (m) {
-        m.capability += 8;
+        m.capability = Math.min(BAL.ASI_CAPABILITY, m.capability + 8);
         shiftAlignment(m, -18);
         widenBand(m, 15);
       }

@@ -22,7 +22,7 @@ export function FinanceTab() {
       <div className="col">
         <PnlPanel />
 
-        <div className="panel">
+        <div className="panel" data-tut="panel-pricing">
           <div className="hd">
             <h2>
               <Icon id="i-tag" />

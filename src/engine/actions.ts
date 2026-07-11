@@ -33,8 +33,9 @@ export function startTrainingRun(state: GameState, lab: Lab, targetFlop: number,
   if (chips <= 0) return err('commit at least some chips');
   if (chips > lab.chips - committedChips(lab)) return err('not enough free chips');
   const cost = trainCost(lab, targetFlop);
-  if (lab.cash < cost) return err('not enough cash');
-  lab.cash -= cost;
+  const upfront = cost * BAL.TRAIN_UPFRONT_FRAC;
+  if (lab.cash < upfront) return err('not enough cash for the up-front payment');
+  lab.cash -= upfront;
   const modelNumber = lab.modelCounter + 1;
   lab.run = {
     id: `run-${lab.id}-${state.week}`,
@@ -45,7 +46,8 @@ export function startTrainingRun(state: GameState, lab: Lab, targetFlop: number,
     startedWeek: state.week,
     chips,
     estCapability: predictCapability(lab, targetFlop, state.world.algoProgress),
-    costPaid: cost,
+    costTotal: cost,
+    costPaid: upfront,
   };
   rebalanceAllocations(lab);
   return ok(`training run ${lab.run.codename} started`);

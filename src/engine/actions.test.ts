@@ -6,14 +6,16 @@ import { advanceWeek } from './tick';
 import { flagship, trainCost } from './model';
 
 describe('training runs', () => {
-  it('start pays up front and rejects a second run', () => {
+  it('start pays the up-front share and rejects a second run', () => {
     const state = newGame('helios', 1);
     const lab = state.labs.helios;
     lab.cash = 5000;
     const cost = trainCost(lab, 2e27);
     const res = startTrainingRun(state, lab, 2e27, 8000);
     expect(res.ok).toBe(true);
-    expect(lab.cash).toBeCloseTo(5000 - cost, 5);
+    expect(lab.cash).toBeCloseTo(5000 - cost * BAL.TRAIN_UPFRONT_FRAC, 5);
+    expect(lab.run!.costTotal).toBeCloseTo(cost, 5);
+    expect(lab.run!.costPaid).toBeCloseTo(cost * BAL.TRAIN_UPFRONT_FRAC, 5);
     expect(startTrainingRun(state, lab, 1e27, 2000).ok).toBe(false);
   });
 
@@ -48,19 +50,22 @@ describe('training runs', () => {
     expect(lab.alloc.alignment).toBe(1000);
   });
 
-  it('progresses weekly and finishes into the vault (no auto-promote for player)', () => {
+  it('progresses weekly, finishes, and auto-promotes the new model to flagship', () => {
     const state = newGame('helios', 2);
     const lab = state.labs.helios;
     lab.cash = 100_000;
     startTrainingRun(state, lab, 12_000 * BAL.FLOP_PER_CHIP_WEEK * 10, 12_000);
     const flagshipBefore = lab.flagshipId;
+    const run = lab.run!;
     for (let i = 0; i < 30 && lab.run; i++) {
       state.pendingEvents = [];
       advanceWeek(state);
     }
     expect(lab.run).toBeNull();
+    expect(run.costPaid).toBeCloseTo(run.costTotal, 5); // weekly payments settle the full cost by completion
     expect(lab.models.length).toBe(2);
-    expect(lab.flagshipId).toBe(flagshipBefore); // player must promote manually
+    expect(lab.flagshipId).not.toBe(flagshipBefore); // fresh model takes over automatically
+    expect(lab.flagshipId).toBe(lab.models[1].id);
   });
 
   it('abort salvages a weak model and frees the run slot', () => {

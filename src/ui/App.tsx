@@ -22,6 +22,7 @@ import { RivalsTab } from './tabs/Rivals';
 import { WorldTab } from './tabs/World';
 import { FeedTab } from './tabs/Feed';
 import { EventModal, NoticeModal } from './EventModal';
+import { TutorialDock } from './TutorialDock';
 
 export default function App() {
   const game = useGameController();
@@ -105,6 +106,9 @@ function StartScreen() {
           <input value={seed} onChange={(e) => setSeed(Number(e.target.value.replace(/\D/g, '')) || 0)} />
         </div>
         <div className="launchbtns">
+          <button className="btn" title="A guided first game: the advisor walks you through every mechanic once" onClick={() => game.startTutorial()}>
+            Tutorial
+          </button>
           {canContinue && (
             <button className="btn" onClick={() => game.load()}>
               Continue saved game
@@ -203,7 +207,7 @@ export function GameScreen() {
             <div className="date">{date.label}</div>
             <div className="week">WEEK {st.week}</div>
           </div>
-          <div className="speed">
+          <div className="speed" data-tut="speed">
             {speedBtn(0, '❚❚')}
             {speedBtn(1, '1×')}
             {speedBtn(2, '2×')}
@@ -298,7 +302,7 @@ export function GameScreen() {
 
       <nav>
         {TABS.map((t) => (
-          <button key={t.id} className={game.tab === t.id ? 'on' : ''} onClick={() => game.goTab(t.id)}>
+          <button key={t.id} data-tab={t.id} className={game.tab === t.id ? 'on' : ''} onClick={() => game.goTab(t.id)}>
             <Icon id={t.icon} />
             {t.label}
           </button>
@@ -332,6 +336,7 @@ export function GameScreen() {
 
       {pending && !st.gameOver && <EventModal />}
       {!pending && !st.gameOver && <NoticeModal />}
+      {st.tutorial && !st.gameOver && <TutorialDock />}
       {st.gameOver && <EndScreen />}
     </>
   );

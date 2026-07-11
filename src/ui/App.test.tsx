@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { renderToString } from 'react-dom/server';
-import { newGame } from '../engine/init';
+import { newGame, newTutorialGame } from '../engine/init';
 import { advanceWeek } from '../engine/tick';
 import { respondToEvent } from '../engine/actions';
 import { flagship } from '../engine/model';
@@ -38,6 +38,7 @@ function fakeGame(state: GameState, tab: TabId, notices: Game['notices'] = []): 
     goTab: () => {},
     act: (fn) => void fn(state),
     start: () => {},
+    startTutorial: () => {},
     load: () => false,
     save: () => {},
     quitToMenu: () => {},
@@ -61,6 +62,7 @@ describe('UI smoke', () => {
     // the wordmark is split for the outlined-OFF treatment: TAKE<span>OFF</span>
     expect(html).toMatch(/TAKE.*OFF/);
     expect(html).toContain('New game');
+    expect(html).toContain('Tutorial');
   });
 
   const state = midGame();
@@ -103,6 +105,14 @@ describe('UI smoke', () => {
     expect(html).toContain('Chips delivered');
     expect(html).toContain('status report');
     expect(html).toContain('Continue');
+  });
+
+  it('tutorial dock renders on every tab of a tutorial game', () => {
+    const s = newTutorialGame();
+    for (const tab of TABS) {
+      const html = renderTab(s, tab);
+      expect(html).toContain('TUTORIAL · STEP');
+    }
   });
 
   it('end screen renders on game over', () => {

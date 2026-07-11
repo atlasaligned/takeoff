@@ -25,11 +25,14 @@ interface LabSeed {
 
 // Jan 2025 calibration: US labs ≈ +$20-30M/wk revenue vs ≈ −$90-125M/wk costs
 // (fundraising and contracts carry them); PRC labs run at ~1/10 that scale.
+// Start capabilities sit at what each lab could plausibly have TRAINED with its
+// starting fleet and cash — US ≈ 10, PRC ≈ 2-3 (their bigger-than-US-relative
+// fleets are what make even that much theoretically trainable).
 export const LAB_SEEDS: LabSeed[] = [
-  { id: 'helios', name: 'Entropic', shortName: 'ENTROPIC', hq: 'San Francisco · US', country: 'us', color: '#3b9dd6', startCap: 17, chips: 25_000, cash: 2500, valuation: 60_000, govTrust: 45, publicTrust: 50, profile: { aggression: 0.55, safety: 0.6, commerce: 0.5 } },
-  { id: 'axiom', name: 'OpenAGI', shortName: 'OPENAGI', hq: 'Austin · US', country: 'us', color: '#e5484d', startCap: 19, chips: 32_000, cash: 4000, valuation: 90_000, govTrust: 50, publicTrust: 44, profile: { aggression: 0.9, safety: 0.2, commerce: 0.55 } },
-  { id: 'tianshu', name: 'DeepSeed 深种', shortName: 'DEEPSEED', hq: 'Hangzhou · PRC', country: 'prc', color: '#bd7f24', startCap: 10, chips: 3_000, cash: 600, valuation: 9_000, govTrust: 62, publicTrust: 52, profile: { aggression: 0.65, safety: 0.35, commerce: 0.6 } },
-  { id: 'qingfeng', name: 'Moonshine 月光', shortName: 'MOONSHINE', hq: 'Shenzhen · PRC', country: 'prc', color: '#7d8794', startCap: 8, chips: 2_200, cash: 450, valuation: 7_000, govTrust: 52, publicTrust: 58, profile: { aggression: 0.45, safety: 0.3, commerce: 0.85 } },
+  { id: 'helios', name: 'Entropic', shortName: 'ENTROPIC', hq: 'San Francisco · US', country: 'us', color: '#3b9dd6', startCap: 10, chips: 25_000, cash: 2500, valuation: 60_000, govTrust: 45, publicTrust: 50, profile: { aggression: 0.55, safety: 0.6, commerce: 0.5 } },
+  { id: 'axiom', name: 'OpenAGI', shortName: 'OPENAGI', hq: 'Austin · US', country: 'us', color: '#e5484d', startCap: 11, chips: 32_000, cash: 4000, valuation: 90_000, govTrust: 50, publicTrust: 44, profile: { aggression: 0.9, safety: 0.2, commerce: 0.55 } },
+  { id: 'tianshu', name: 'DeepSeed 深种', shortName: 'DEEPSEED', hq: 'Hangzhou · PRC', country: 'prc', color: '#bd7f24', startCap: 3, chips: 6_000, cash: 600, valuation: 9_000, govTrust: 62, publicTrust: 52, profile: { aggression: 0.65, safety: 0.35, commerce: 0.6 } },
+  { id: 'qingfeng', name: 'Moonshine 月光', shortName: 'MOONSHINE', hq: 'Shenzhen · PRC', country: 'prc', color: '#7d8794', startCap: 2, chips: 5_000, cash: 450, valuation: 7_000, govTrust: 52, publicTrust: 58, profile: { aggression: 0.45, safety: 0.3, commerce: 0.85 } },
 ];
 
 function makeStartModel(rng: RngState, seed: LabSeed, index: number): Model {
@@ -160,5 +163,17 @@ export function newGame(playerLab: LabId, seed: number, hintsEnabled = false): G
     lab.licensesServed = pnl.licensesServed;
   }
   snapshotHistory(state); // week-1 point so the race chart exists from the start
+  return state;
+}
+
+/**
+ * Guided tutorial: fixed lab and seed, a war chest big enough to try every
+ * mechanic once, and no random/government events (see advanceWeek) so the
+ * scripted tour is never interrupted. Tutorial games are never saved.
+ */
+export function newTutorialGame(): GameState {
+  const state = newGame('helios', 42, false);
+  state.tutorial = true;
+  state.labs[state.playerLab].cash = 25_000;
   return state;
 }

@@ -32,7 +32,7 @@ export type StarField =
   | 'scaling' // % capability per training run
   | 'rl' // % post-training effect
   | 'interp' // % alignment band narrowing
-  | 'security' // flat robustness on new models
+  | 'robustness' // flat robustness on new models
   | 'alignment' // % alignment work effectiveness
   | 'agents'; // % revenue
 
@@ -52,7 +52,7 @@ export interface Model {
   id: string;
   name: string;
   createdWeek: number;
-  capability: number; // 0..inf, 100 triggers the win roll
+  capability: number; // 0..100, capped at 100 — reaching the cap triggers the win roll
   alignment: number; // TRUE alignment 0..100, hidden from player
   /** displayed band [lo, hi]; invariant: lo <= alignment <= hi */
   alignmentLo: number;
@@ -74,6 +74,9 @@ export interface TrainingRun {
   chips: number;
   /** capability the finished model is predicted to reach (recomputed with bonuses at finish) */
   estCapability: number;
+  /** full cash cost: TRAIN_UPFRONT_FRAC at launch, the rest weekly with FLOP progress */
+  costTotal: number;
+  /** cash paid so far (upfront + settled weekly payments) */
   costPaid: number;
 }
 
@@ -302,4 +305,6 @@ export interface GameState {
   weeksSinceEvent: number;
   /** newer-player mode: the advisor suggests a helpful next action */
   hintsEnabled: boolean;
+  /** guided tutorial game: random events are suppressed and the game is never saved */
+  tutorial?: boolean;
 }

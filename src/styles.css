@@ -563,6 +563,28 @@ input[type=number]{appearance:textfield}
   font:500 9.5px var(--mono);letter-spacing:.1em;text-transform:uppercase;padding:4px 10px;cursor:pointer;flex:none;white-space:nowrap}
 .hintbar .hnext:hover{color:var(--text);border-color:var(--dim)}
 
+/* ============ tutorial ============ */
+/* the dock locks the whole shell; only the step's .tut-allow targets stay live */
+body.tut-lock .frontier,body.tut-lock header,body.tut-lock .statebar,body.tut-lock nav,
+body.tut-lock main,body.tut-lock .menubtn{pointer-events:none}
+body.tut-lock .tut-allow{pointer-events:auto}
+@keyframes tutpulse{0%,100%{box-shadow:0 0 0 1px var(--red)}50%{box-shadow:0 0 0 1px var(--red),0 0 0 6px rgba(255,42,42,.14)}}
+.tut-allow{position:relative;z-index:5;animation:tutpulse 1.5s infinite}
+/* briefing modal — reuses .modal; steady red label (no blink: nothing is wrong) */
+.modal.tutorial .mh .paused{animation:none}
+.tuttask{margin-bottom:16px;padding:8px 10px;border:1px solid var(--red-deep);background:var(--red-bg);
+  font:500 11.5px var(--mono);color:var(--text);letter-spacing:.02em}
+.tuttask::before{content:'▸ ';color:var(--red)}
+/* minimized state — a slim task strip, bottom center, board fully visible */
+.tutstrip{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:70;display:flex;align-items:center;gap:14px;
+  background:var(--panel);border:1px solid var(--border);border-left:3px solid var(--red);padding:8px 14px;
+  box-shadow:0 16px 48px rgba(0,0,0,.55);max-width:calc(100vw - 36px);white-space:nowrap}
+.tutstrip .stepno{font:600 10px var(--mono);letter-spacing:.18em;color:var(--red)}
+.tutstrip .tk{font:500 12px var(--mono);color:var(--text);overflow:hidden;text-overflow:ellipsis}
+.tutstrip .tk::before{content:'▸ ';color:var(--red)}
+.tutstrip .tb2{background:none;border:none;color:var(--faint);font:500 10px var(--mono);letter-spacing:.12em;text-transform:uppercase;cursor:pointer;padding:2px 0}
+.tutstrip .tb2:hover{color:var(--text)}
+
 /* ============ motion discipline ============ */
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation:none!important;transition:none!important}

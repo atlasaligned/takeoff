@@ -35,7 +35,7 @@ export function countryFrontier(state: GameState, country: GovId): number {
 export function worldTick(state: GameState): void {
   const w = state.world;
   const frontier = frontierCap(state);
-  w.adoption = clamp100(w.adoption + BAL.ADOPTION_BASE_GROWTH + Math.max(0, frontier - 20) * BAL.ADOPTION_PER_FRONTIER);
+  w.adoption = clamp100(w.adoption + BAL.ADOPTION_BASE_GROWTH + Math.max(0, frontier - BAL.ADOPTION_FRONTIER_BASE) * BAL.ADOPTION_PER_FRONTIER);
   w.backlog = Math.max(0, w.backlog * (1 - BAL.BACKLOG_DECAY));
   w.chipPrice = BAL.CHIP_PRICE_BASE * (1 + w.backlog / BAL.BACKLOG_SOFT);
   w.chipDeliveryWeeks = BAL.CHIP_DELIVERY_BASE + w.backlog * BAL.DELIVERY_PER_BACKLOG;

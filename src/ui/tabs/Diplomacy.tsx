@@ -138,7 +138,7 @@ export function DiplomacyTab() {
           </div>
         </div>
 
-        <div className="panel">
+        <div className="panel" data-tut="panel-smallactions">
           <div className="hd">
             <h2>
               <Icon id="i-zap" />

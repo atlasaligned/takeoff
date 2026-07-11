@@ -40,7 +40,7 @@ const STAR_FIELDS: { field: StarField; label: string; lo: number; hi: number }[]
   { field: 'scaling', label: 'scaling', lo: 4, hi: 10 },
   { field: 'rl', label: 'RL', lo: 5, hi: 12 },
   { field: 'interp', label: 'interpretability', lo: 6, hi: 15 },
-  { field: 'security', label: 'security', lo: 3, hi: 8 },
+  { field: 'robustness', label: 'robustness', lo: 3, hi: 8 },
   { field: 'alignment', label: 'alignment', lo: 6, hi: 15 },
   { field: 'agents', label: 'agents', lo: 4, hi: 10 },
 ];

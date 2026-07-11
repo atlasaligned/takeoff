@@ -121,7 +121,7 @@ export function ComputePanel() {
         {staticRow(COLOR.postTraining, 'Post-training', ptChips, player.postTraining ? `${player.postTraining.weeksLeft} wk left` : 'not running')}
         {staticRow(COLOR.inference, 'Inference', a.inference, inferenceText, inferenceTone)}
 
-        <div className="arow">
+        <div className="arow" data-tut="alloc-align">
           <i className="sw" style={{ background: COLOR.alignment }} />
           <div className="grow">
             <div className="row">

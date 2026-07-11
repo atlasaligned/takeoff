@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { fundraise, orderChips } from '../engine/actions';
 import { BAL } from '../engine/balance';
 import { chipDeliveryFor, chipPriceFor, dilutionOf, investorPressure, licenseDemand, maxChipOrder, raiseTerms, runwayWeeks, weeklyPnl } from '../engine/finance';
+import { nextRunPayment } from '../engine/model';
 import { fmtCompact, fmtDate, fmtMoney, fmtWeeks } from './format';
 import { Icon } from './icons';
 import { useGame, useSt } from './useGame';
@@ -11,6 +12,8 @@ export function PnlPanel() {
   const st = useSt();
   const player = st.labs[st.playerLab];
   const pnl = weeklyPnl(st, player, licenseDemand(st));
+  const trainPay = player.run ? nextRunPayment(player, player.run) : 0;
+  const net = pnl.net - trainPay;
 
   return (
     <div className="panel">
@@ -19,8 +22,8 @@ export function PnlPanel() {
           <Icon id="i-doc" />
           Weekly P&L
         </h2>
-        <span className="tag" style={{ color: pnl.net < 0 ? 'var(--danger)' : 'var(--good)' }}>
-          net {fmtMoney(pnl.net)}
+        <span className="tag" style={{ color: net < 0 ? 'var(--danger)' : 'var(--good)' }}>
+          net {fmtMoney(net)}
         </span>
       </div>
       <div className="bd">
@@ -61,6 +64,14 @@ export function PnlPanel() {
               <td>Compute operations</td>
               <td className="num">−{fmtMoney(pnl.computeOpex)}</td>
             </tr>
+            {player.run && (
+              <tr>
+                <td>
+                  Training run {player.run.codename} <span style={{ color: 'var(--faint)' }}>(pay-as-you-burn)</span>
+                </td>
+                <td className="num">−{fmtMoney(trainPay)}</td>
+              </tr>
+            )}
             {player.lawsuits.map((l, i) => (
               <tr key={i}>
                 <td>
@@ -73,8 +84,8 @@ export function PnlPanel() {
               <td>
                 <b>Net</b>
               </td>
-              <td className="num" style={{ color: pnl.net < 0 ? 'var(--danger)' : 'var(--good)' }}>
-                <b>{fmtMoney(pnl.net)}</b>
+              <td className="num" style={{ color: net < 0 ? 'var(--danger)' : 'var(--good)' }}>
+                <b>{fmtMoney(net)}</b>
               </td>
             </tr>
           </tbody>
@@ -213,7 +224,7 @@ export function BuyComputePanel() {
   const cost = size * chipPrice;
 
   return (
-    <div className="panel">
+    <div className="panel" data-tut="panel-buychips">
       <div className="hd">
         <h2>
           <Icon id="i-package" />

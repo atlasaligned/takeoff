@@ -149,7 +149,7 @@ describe('win probability', () => {
 
 describe('training run finish', () => {
   function run(targetFlop: number, doneFlop: number): TrainingRun {
-    return { id: 'r', codename: 'TEST', modelName: 'HELIOS-2', targetFlop, doneFlop, startedWeek: 0, chips: 5000, estCapability: 0, costPaid: 0 };
+    return { id: 'r', codename: 'TEST', modelName: 'HELIOS-2', targetFlop, doneFlop, startedWeek: 0, chips: 5000, estCapability: 0, costTotal: 0, costPaid: 0 };
   }
 
   it('completed runs produce the full log-curve capability (absent people bonuses)', () => {

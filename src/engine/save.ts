@@ -1,7 +1,7 @@
 import type { GameState } from './types';
 
-// v4: govt procurement ladder + crackdown branch (govLadder state, lab govt flags).
-export const SAVE_VERSION = 4;
+// v6: TrainingRun gained costTotal (upfront + weekly payment split); lower start capabilities.
+export const SAVE_VERSION = 6;
 
 /** GameState is plain JSON by construction — serialization is trivial. */
 export function serialize(state: GameState): string {

@@ -27,7 +27,7 @@ export function licenseDemand(state: GameState): Record<string, number> {
 export function seatsPerChip(lab: Lab): number {
   const mods = labMods(lab);
   const cap = flagship(lab)?.capability ?? 0;
-  const capMult = 1 + Math.max(0, cap - 20) * BAL.SEATS_PER_CHIP_CAP_SCALE;
+  const capMult = 1 + Math.max(0, cap - BAL.SEATS_PER_CHIP_CAP_BASE) * BAL.SEATS_PER_CHIP_CAP_SCALE;
   return lab.chipEfficiency * BAL.SEATS_PER_CHIP * capMult * mods.inferenceSeatsMult;
 }
 

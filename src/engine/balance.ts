@@ -25,6 +25,13 @@ export const BAL = {
   FLOP_PER_CHIP_WEEK: 7e21,
   /** train cost: $M per 1e27 FLOP (before research discounts) */
   TRAIN_COST_PER_E27: 285,
+  /**
+   * fraction of a run's cash cost due at launch (data, engineering, cluster
+   * prep). The rest is paid week by week as the FLOP actually burns, so a
+   * frontier run is a payment plan against future revenue rather than one
+   * enormous upfront check. Aborting cancels the unpaid remainder.
+   */
+  TRAIN_UPFRONT_FRAC: 0.35,
   /** fraction of final capability you keep if you abort at progress p: p^ABORT_EXP */
   ABORT_EXP: 3,
   /** weekly passive algorithmic progress: multiplier on effective FLOP, compounding */
@@ -150,13 +157,15 @@ export const BAL = {
   PRICE_ELASTICITY: 1.4,
   REF_PRICE: 25, // $/seat/month
   /**
-   * seats served per inference chip at capability 20 (before MoE etc.);
+   * seats served per inference chip at the base capability (before MoE etc.);
    * grows with flagship capability — better models serve far more users per
    * chip. Tuned so week-0 demand ≈ the whole starting fleet: alignment and
    * training compute come straight out of served revenue.
    */
   SEATS_PER_CHIP: 150,
-  SEATS_PER_CHIP_CAP_SCALE: 0.18, // +18% seats/chip per capability point above 20
+  SEATS_PER_CHIP_CAP_SCALE: 0.18, // +18% seats/chip per capability point above the base
+  /** capability where seats/chip growth starts — sits just above the US start caps */
+  SEATS_PER_CHIP_CAP_BASE: 13,
   DEFAULT_LICENSE_PRICE: 25,
   /** PRC labs address a mostly-domestic market: demand weight multiplier */
   PRC_DEMAND_MULT: 0.12,
@@ -171,7 +180,8 @@ export const BAL = {
   REV_MULTIPLE_FLOOR: 8,
   /** $M of annual revenue at which the multiple has compressed ~63% of the way */
   REV_MULTIPLE_COMPRESS: 60_000,
-  CAP_PREMIUM: 4000, // $M
+  /** anchored so a start-cap (~10) US lab has the same fair value it had at the old cap-17 start */
+  CAP_PREMIUM: 7200, // $M
   CAP_PREMIUM_SCALE: 12,
   VALUATION_DRIFT: 0.08, // weekly fraction moved toward fair value
 
@@ -265,7 +275,9 @@ export const BAL = {
   // ---------------------------------------------------------------- adoption
   ADOPTION_START: 12,
   ADOPTION_BASE_GROWTH: 0.45, // per week
-  ADOPTION_PER_FRONTIER: 0.025, // extra per point of frontier cap above 20
+  ADOPTION_PER_FRONTIER: 0.025, // extra per point of frontier cap above the base
+  /** frontier capability where adoption growth accelerates — just above the US start caps */
+  ADOPTION_FRONTIER_BASE: 13,
 
   // ---------------------------------------------------------------- events
   /** chance of a random event per week = base + perWeek * week (capped) */

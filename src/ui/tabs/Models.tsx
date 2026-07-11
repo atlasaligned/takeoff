@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { abortTrainingRun, promoteModel, startPostTraining, startTrainingRun } from '../../engine/actions';
 import { BAL } from '../../engine/balance';
-import { committedChips, flagship, postTrainCost, postTrainPreview, predictCapability, runProgress, runWeeksLeft, trainCost } from '../../engine/model';
+import { committedChips, flagship, nextRunPayment, postTrainCost, postTrainPreview, predictCapability, runProgress, runWeeksLeft, trainCost } from '../../engine/model';
 import { fmtCompact, fmtFlop, fmtMoney, fmtWeeks } from '../format';
 import { Icon } from '../icons';
 import { useGame, useSt } from '../useGame';
@@ -18,11 +18,13 @@ export function ModelsTab() {
   const trainChips = Math.min(commit, maxCommit);
   const flop = trainChips * player.chipEfficiency * BAL.FLOP_PER_CHIP_WEEK * runWeeks;
   const cost = trainCost(player, flop);
+  const upfront = cost * BAL.TRAIN_UPFRONT_FRAC;
+  const weeklyPay = (cost - upfront) / Math.max(1, runWeeks);
   const estCap = predictCapability(player, flop, st.world.algoProgress);
 
   return (
     <div className="grid3" style={{ gridTemplateColumns: '380px 1fr 400px' }}>
-      <div className="panel">
+      <div className="panel" data-tut="panel-flagship">
         <div className="hd">
           <h2>
             <Icon id="i-chipset" />
@@ -159,7 +161,7 @@ export function ModelsTab() {
         </div>
       </div>
 
-      <div className="panel">
+      <div className="panel" data-tut="panel-train">
         <div className="hd">
           <h2>
             <Icon id="i-flame" />
@@ -183,7 +185,8 @@ export function ModelsTab() {
               </div>
               <div className="sub">
                 {player.run.modelName} · {fmtFlop(player.run.targetFlop)} FLOP · est. capability ~{player.run.estCapability.toFixed(0)} ·{' '}
-                {fmtCompact(player.run.chips)} chips committed
+                {fmtCompact(player.run.chips)} chips committed · paid {fmtMoney(player.run.costPaid)} of {fmtMoney(player.run.costTotal)} (≈
+                {fmtMoney(nextRunPayment(player, player.run))}/wk)
               </div>
               <div className="note" style={{ marginTop: 6 }}>
                 Most capability gains land in the final weeks. Aborting now keeps ~
@@ -228,8 +231,14 @@ export function ModelsTab() {
               </div>
               <div className="kv">
                 <span className="k">Up-front cost</span>
-                <span className="v" style={cost > player.cash ? { color: 'var(--danger)' } : undefined}>
-                  {fmtMoney(cost)}
+                <span className="v" style={upfront > player.cash ? { color: 'var(--danger)' } : undefined}>
+                  {fmtMoney(upfront)}
+                </span>
+              </div>
+              <div className="kv">
+                <span className="k">Then weekly</span>
+                <span className="v">
+                  ≈{fmtMoney(weeklyPay)}/wk × {runWeeks} wk ({fmtMoney(cost)} total)
                 </span>
               </div>
               <div className="kv">
@@ -239,16 +248,17 @@ export function ModelsTab() {
                 </span>
               </div>
               <div className="note" style={{ margin: '6px 0' }}>
-                Capability scales log-like with compute — each step costs ~10× more. Cost is paid up front; the chips are committed until the run ends
-                (or you abort for a subpar model). New model inherits some alignment/robustness from the flagship, plus a large random component.
+                Capability scales log-like with compute — each step costs ~10× more. You pay {(BAL.TRAIN_UPFRONT_FRAC * 100).toFixed(0)}% up front and
+                the rest week by week as the run burns FLOP; the chips are committed until it ends (or you abort — that cancels the unpaid remainder but
+                keeps little capability). New model inherits some alignment/robustness from the flagship, plus a large random component.
               </div>
               <div className="btnrow">
                 <button
                   className="btn primary wide"
-                  disabled={trainChips < 500 || cost > player.cash}
+                  disabled={trainChips < 500 || upfront > player.cash}
                   onClick={() => game.act((s) => startTrainingRun(s, s.labs[s.playerLab], flop, trainChips))}
                 >
-                  {trainChips < 500 ? 'Commit more chips' : cost > player.cash ? 'Not enough cash' : `Start run — ${fmtMoney(cost)}`}
+                  {trainChips < 500 ? 'Commit more chips' : upfront > player.cash ? 'Not enough cash' : `Start run — ${fmtMoney(upfront)} down`}
                 </button>
               </div>
             </>

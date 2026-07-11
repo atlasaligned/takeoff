@@ -118,7 +118,7 @@ export function ResearchTab() {
   const sel = selected ? RESEARCH_BY_ID[selected] : null;
 
   return (
-    <div className="rlayout">
+    <div className="rlayout" data-tut="research-root">
       <div className="rmain">
         <div className="pills">
           {BRANCHES.map((b) => (

@@ -27,7 +27,7 @@ export function trainCost(lab: Lab, targetFlop: number): number {
 /** Predicted capability for a run given this lab's current multipliers. */
 export function predictCapability(lab: Lab, targetFlop: number, algoProgress: number): number {
   const mods = labMods(lab);
-  return capabilityFromFlop(targetFlop * mods.effFlopMult * algoProgress) * mods.capRunBonusMult;
+  return Math.min(BAL.ASI_CAPABILITY, capabilityFromFlop(targetFlop * mods.effFlopMult * algoProgress) * mods.capRunBonusMult);
 }
 
 /** Estimated weeks left at the run's committed chips. */
@@ -40,6 +40,27 @@ export function runWeeksLeft(lab: Lab, run: TrainingRun): number {
 
 export function runProgress(run: TrainingRun): number {
   return Math.min(1, run.doneFlop / run.targetFlop);
+}
+
+/**
+ * Settle this week's training payment (call after FLOP progress is applied):
+ * the deferred share of the cost tracks progress, so the run pays for the
+ * compute as it burns it. Returns the cash due this week.
+ */
+export function settleRunPayment(run: TrainingRun): number {
+  const owed = run.costTotal * (BAL.TRAIN_UPFRONT_FRAC + (1 - BAL.TRAIN_UPFRONT_FRAC) * runProgress(run));
+  const pay = Math.max(0, owed - run.costPaid);
+  run.costPaid += pay;
+  return pay;
+}
+
+/** Next week's scheduled training payment at current pace (pure, for previews). */
+export function nextRunPayment(lab: Lab, run: TrainingRun): number {
+  const mods = labMods(lab);
+  const flopPerWeek = run.chips * lab.chipEfficiency * BAL.FLOP_PER_CHIP_WEEK * mods.trainSpeedMult * (1 - lab.regulationDrag);
+  const progressNext = Math.min(1, (run.doneFlop + flopPerWeek) / run.targetFlop);
+  const owed = run.costTotal * (BAL.TRAIN_UPFRONT_FRAC + (1 - BAL.TRAIN_UPFRONT_FRAC) * progressNext);
+  return Math.max(0, owed - run.costPaid);
 }
 
 /**
@@ -91,7 +112,7 @@ export function finishTrainingRun(lab: Lab, run: TrainingRun, week: number, algo
   const mods = labMods(lab);
   const progress = runProgress(run);
   const fullCap = capabilityFromFlop(run.doneFlop * mods.effFlopMult * algoProgress) * mods.capRunBonusMult;
-  const cap = aborted ? fullCap * abortCapabilityFraction(progress) : fullCap;
+  const cap = Math.min(BAL.ASI_CAPABILITY, aborted ? fullCap * abortCapabilityFraction(progress) : fullCap);
 
   const prev = flagship(lab);
   const prevAlign = prev ? prev.alignment : 20;
@@ -210,7 +231,7 @@ export function applyPostTraining(lab: Lab): void {
   const m = flagship(lab);
   if (!m) return;
   const g = postTrainPreview(lab);
-  m.capability += g.cap;
+  m.capability = Math.min(BAL.ASI_CAPABILITY, m.capability + g.cap);
   shiftAlignment(m, g.align);
   m.robustness = clamp100(m.robustness + g.robust);
   m.postTrainCount += 1;
@@ -224,7 +245,7 @@ export function rsiTick(lab: Lab): void {
   // the mid-climb but crawls above ~90, so the final push to 100 needs real
   // training runs rather than passive autopilot.
   const decel = Math.max(0, 1 - m.capability / BAL.RSI_DECEL_CAP);
-  m.capability += m.capability * lab.rsiRate * decel;
+  m.capability = Math.min(BAL.ASI_CAPABILITY, m.capability + m.capability * lab.rsiRate * decel);
   if (lab.research.completed.includes('intelligence-explosion')) {
     lab.rsiRate *= BAL.RSI_ACCEL;
   }

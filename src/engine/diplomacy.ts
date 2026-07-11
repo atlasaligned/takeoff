@@ -206,7 +206,7 @@ export function applyTreaty(state: GameState, id: string): void {
       for (const lab of Object.values(state.labs)) {
         if (lab.id === state.playerLab) continue;
         const m = flagship(lab);
-        if (m) m.capability += BAL.TRANSPARENCY_RIVAL_CAP_GAIN;
+        if (m) m.capability = Math.min(BAL.ASI_CAPABILITY, m.capability + BAL.TRANSPARENCY_RIVAL_CAP_GAIN);
       }
       break;
     case 'incident-reporting':

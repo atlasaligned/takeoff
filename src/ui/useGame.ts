@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { advanceWeek, isPaused } from '../engine/tick';
 import { deserialize, serialize } from '../engine/save';
-import { newGame } from '../engine/init';
+import { newGame, newTutorialGame } from '../engine/init';
 import type { ActionResult } from '../engine/actions';
 import type { FeedItem, GameState, LabId } from '../engine/types';
 
@@ -29,6 +29,8 @@ export interface Game {
   /** run an engine action against the live state and re-render */
   act: (fn: (s: GameState) => ActionResult | void) => void;
   start: (lab: LabId, seed: number, hints: boolean) => void;
+  /** guided tutorial game — never written to the save slot */
+  startTutorial: () => void;
   load: () => boolean;
   save: () => void;
   quitToMenu: () => void;
@@ -58,7 +60,7 @@ export function useGameController(): Game {
 
   const save = useCallback(() => {
     const s = stateRef.current;
-    if (!s) return;
+    if (!s || s.tutorial) return; // tutorial games must not clobber the real save
     try {
       localStorage.setItem(SAVE_KEY, serialize(s));
     } catch {
@@ -139,6 +141,15 @@ export function useGameController(): Game {
     [bump, save],
   );
 
+  const startTutorial = useCallback(() => {
+    stateRef.current = newTutorialGame();
+    noticesRef.current = [];
+    noticeSeen.current = stateRef.current.feedCounter;
+    setTab('overview');
+    setSpeedRaw(0);
+    bump();
+  }, [bump]);
+
   const load = useCallback((): boolean => {
     try {
       const json = localStorage.getItem(SAVE_KEY);
@@ -177,6 +188,7 @@ export function useGameController(): Game {
     goTab,
     act,
     start,
+    startTutorial,
     load,
     save,
     quitToMenu,
