@@ -1,11 +1,90 @@
 import { useState } from 'react';
-import { fundraise, orderChips, pursueLead } from '../engine/actions';
+import { fundraise, orderChips, pursueLead, setLicensePrice } from '../engine/actions';
 import { BAL } from '../engine/balance';
-import { chipDeliveryFor, chipPriceFor, dilutionOf, investorPressure, licenseDemand, maxChipOrder, raiseTerms, runwayWeeks, weeklyPnl } from '../engine/finance';
+import { chipDeliveryFor, chipPriceFor, dilutionOf, investorPressure, licenseDemand, maxChipOrder, maxLicensePrice, raiseTerms, runwayWeeks, serveCapacity, weeklyPnl } from '../engine/finance';
 import { committedChips, nextRunPayment } from '../engine/model';
 import { fmtCompact, fmtDate, fmtMoney, fmtWeeks } from './format';
 import { Icon } from './icons';
 import { useGame, useSt } from './useGame';
+
+/**
+ * License-price slider + demand/capacity/revenue readout — shared by Overview
+ * (`compact`) and Finance. The slider's max grows with capability so the
+ * revenue-maximizing price is always reachable (see `maxLicensePrice`).
+ */
+export function PricingPanel({ compact = false }: { compact?: boolean }) {
+  const game = useGame();
+  const st = useSt();
+  const player = st.labs[st.playerLab];
+
+  const demand = licenseDemand(st);
+  const pnl = weeklyPnl(st, player, demand);
+  const capacity = serveCapacity(player);
+  const myDemand = demand[player.id] ?? 0;
+  const maxPrice = maxLicensePrice(st, player);
+  const step = maxPrice > 1000 ? 10 : maxPrice > 300 ? 5 : 1;
+
+  return (
+    <div className="panel" data-tut="panel-pricing">
+      <div className="hd">
+        <h2>
+          <Icon id="i-tag" />
+          Market & pricing
+        </h2>
+        {compact ? (
+          <button className="deeplink" onClick={() => game.goTab('finance')}>
+            Finance →
+          </button>
+        ) : (
+          <span className="tag" style={{ color: 'var(--faint)' }}>
+            adoption {st.world.adoption.toFixed(0)}/100
+          </span>
+        )}
+      </div>
+      <div className="bd">
+        <div className="slider">
+          <div className="row">
+            <span className="k">License price / seat / mo</span>
+            <span className="v">${player.licensePrice}</span>
+          </div>
+          <input
+            type="range"
+            min={4}
+            max={maxPrice}
+            step={step}
+            value={Math.min(player.licensePrice, maxPrice)}
+            onChange={(e) => game.act((s) => setLicensePrice(s.labs[s.playerLab], Number(e.target.value)))}
+          />
+        </div>
+        <div style={{ display: 'flex', gap: 26, marginTop: 10 }}>
+          <div className="hm">
+            <div className="k">Demand</div>
+            <div className="v" style={{ fontSize: 15 }}>
+              {fmtCompact(myDemand)} seats
+            </div>
+          </div>
+          <div className="hm">
+            <div className="k">Capacity</div>
+            <div className="v" style={{ fontSize: 15, color: capacity < myDemand ? 'var(--warn-text)' : undefined }}>
+              {fmtCompact(capacity)} seats
+            </div>
+          </div>
+          <div className="hm">
+            <div className="k">License rev / wk</div>
+            <div className="v" style={{ fontSize: 15 }}>
+              {fmtMoney(pnl.licenseRevenue)}
+            </div>
+          </div>
+        </div>
+        {!compact && (
+          <div className="note" style={{ marginTop: 8 }}>
+            Demand follows capability gap vs. rivals × adoption × price. {capacity < myDemand ? 'You are capacity-limited — free up inference chips or buy compute.' : 'Raising the price trades seats for margin.'}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 /** Weekly P&L table — shared by Overview and Finance. */
 export function PnlPanel() {

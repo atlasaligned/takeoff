@@ -42,6 +42,60 @@ export function licenseRevenueForSeats(lab: Lab, seats: number): number {
   return (seats * lab.licensePrice * mods.revenueMult) / 4.33 / 1e6;
 }
 
+/**
+ * License price ($/seat/mo) that maximizes this lab's weekly license revenue,
+ * given rivals' current capabilities & prices. Accounts for serve capacity:
+ * when capacity-limited the peak sits higher, since demand you can't serve is
+ * wasted and a higher price just lifts revenue on the seats you do serve. As a
+ * lab's capability pulls ahead of rivals, its share at any price rises and the
+ * revenue peak drifts upward — pricing power is the reward for dominance.
+ */
+export function revenueMaxPrice(state: GameState, lab: Lab): number {
+  const e = BAL.PRICE_ELASTICITY;
+  const capMe = flagship(lab)?.capability ?? 0;
+  const baseMe = Math.exp(capMe / BAL.CAP_DEMAND_SCALE) * (lab.country === 'prc' ? BAL.PRC_DEMAND_MULT : 1);
+  let rivalWeight = 0;
+  for (const l of Object.values(state.labs)) {
+    if (!l.alive || l.id === lab.id) continue;
+    const cap = flagship(l)?.capability ?? 0;
+    const prc = l.country === 'prc' ? BAL.PRC_DEMAND_MULT : 1;
+    rivalWeight += Math.exp(cap / BAL.CAP_DEMAND_SCALE) * Math.pow(BAL.REF_PRICE / Math.max(1, l.licensePrice), e) * prc;
+  }
+  const totalSeats = state.world.adoption * state.world.adoption * BAL.SEATS_PER_ADOPTION2;
+  const capacity = serveCapacity(lab);
+  let best: number = BAL.DEFAULT_LICENSE_PRICE;
+  let bestRev = -1;
+  for (let p = 4; p <= 20_000; p *= 1.05) {
+    const w = baseMe * Math.pow(BAL.REF_PRICE / p, e);
+    const demand = w + rivalWeight > 0 ? (totalSeats * w) / (w + rivalWeight) : totalSeats;
+    const rev = Math.min(capacity, demand) * p;
+    if (rev > bestRev) {
+      bestRev = rev;
+      best = p;
+    }
+  }
+  return best;
+}
+
+/**
+ * Upper bound for the license-price slider — the revenue peak plus headroom,
+ * rounded up to a clean value. Grows with capability so the revenue-maximizing
+ * price is always draggable (never pinned below the true optimum), while never
+ * dropping below the early-game floor of 120.
+ */
+export function maxLicensePrice(state: GameState, lab: Lab): number {
+  return Math.max(120, niceCeil(revenueMaxPrice(state, lab) * 1.25));
+}
+
+/** Round up to the nearest 1/2/5 × 10^n — keeps slider maxima tidy. */
+function niceCeil(x: number): number {
+  if (x <= 0) return 0;
+  const mag = Math.pow(10, Math.floor(Math.log10(x)));
+  const n = x / mag;
+  const step = n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10;
+  return step * mag;
+}
+
 export interface WeeklyPnl {
   licenseRevenue: number;
   contractRevenue: number;
@@ -69,8 +123,16 @@ export function weeklyPnl(_state: GameState, lab: Lab, demand: Record<string, nu
   const payroll = (basePayroll + (lab.chips / 10000) * BAL.PAYROLL_PER_10K_CHIPS + namedPay) * mods.burnMult;
 
   // power and datacenter scarcity: opex per chip climbs once the fleet outgrows
-  // the grid (soft cap) — unbounded fleet-maxxing must stop paying for itself
-  const gridStrain = 1 + Math.max(0, (lab.chips - BAL.CHIP_OPEX_SOFT_FLEET) / BAL.CHIP_OPEX_SOFT_FLEET) * BAL.CHIP_OPEX_STRAIN;
+  // the grid (soft cap) — unbounded fleet-maxxing must stop paying for itself.
+  // A frontier lab's grid is more efficient (denser packing, better cooling,
+  // self-designed datacenters), so the soft cap where strain begins grows with
+  // flagship capability. This keeps the strain FULLY punishing for the low-cap
+  // fleet-maxxing cheese (frozen capability → no relief, runaway stays dead)
+  // while sparing the legitimate high-capability endgame fleet from an upkeep
+  // bill that would otherwise explode quadratically.
+  const cap = flagship(lab)?.capability ?? 0;
+  const softFleet = BAL.CHIP_OPEX_SOFT_FLEET * (1 + Math.max(0, cap - BAL.CHIP_OPEX_CAP_BASE) * BAL.CHIP_OPEX_CAP_RELIEF);
+  const gridStrain = 1 + Math.max(0, (lab.chips - softFleet) / softFleet) * BAL.CHIP_OPEX_STRAIN;
   const computeOpex = lab.chips * BAL.CHIP_OPEX * gridStrain * mods.burnMult * mods.chipUpkeepMult;
 
   const lawsuits = lab.lawsuits.reduce((s, l) => s + l.weeklyCost, 0);

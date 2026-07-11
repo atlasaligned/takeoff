@@ -140,7 +140,7 @@ export function pursueLead(state: GameState, lab: Lab, leadId: string): ActionRe
 }
 
 export function setLicensePrice(lab: Lab, price: number): ActionResult {
-  if (price < 1 || price > 500) return err('unreasonable price');
+  if (price < 1 || price > 100_000) return err('unreasonable price');
   lab.licensePrice = price;
   return ok();
 }

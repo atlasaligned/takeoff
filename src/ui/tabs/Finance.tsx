@@ -1,76 +1,20 @@
-import { setLicensePrice } from '../../engine/actions';
-import { chipPriceFor, licenseDemand, serveCapacity, weeklyPnl } from '../../engine/finance';
+import { chipPriceFor } from '../../engine/finance';
 import { fmtCompact, fmtMoney } from '../format';
-import { EnterprisePanel, FundraisingPanel, PnlPanel } from '../FinancePanels';
+import { EnterprisePanel, FundraisingPanel, PnlPanel, PricingPanel } from '../FinancePanels';
 import { Icon } from '../icons';
-import { useGame, useSt } from '../useGame';
+import { useSt } from '../useGame';
 
 export function FinanceTab() {
-  const game = useGame();
   const st = useSt();
   const player = st.labs[st.playerLab];
 
-  const demand = licenseDemand(st);
-  const pnl = weeklyPnl(st, player, demand);
   const chipPrice = chipPriceFor(st, player);
-
-  const capacity = serveCapacity(player);
-  const myDemand = demand[player.id] ?? 0;
 
   return (
     <div className="grid3" style={{ gridTemplateColumns: '1fr 1fr 380px' }}>
       <div className="col">
         <PnlPanel />
-
-        <div className="panel" data-tut="panel-pricing">
-          <div className="hd">
-            <h2>
-              <Icon id="i-tag" />
-              Market & pricing
-            </h2>
-            <span className="tag" style={{ color: 'var(--faint)' }}>
-              adoption {st.world.adoption.toFixed(0)}/100
-            </span>
-          </div>
-          <div className="bd">
-            <div className="slider">
-              <div className="row">
-                <span className="k">License price / seat / mo</span>
-                <span className="v">${player.licensePrice}</span>
-              </div>
-              <input
-                type="range"
-                min={4}
-                max={120}
-                value={player.licensePrice}
-                onChange={(e) => game.act((s) => setLicensePrice(s.labs[s.playerLab], Number(e.target.value)))}
-              />
-            </div>
-            <div style={{ display: 'flex', gap: 26, marginTop: 10 }}>
-              <div className="hm">
-                <div className="k">Demand</div>
-                <div className="v" style={{ fontSize: 15 }}>
-                  {fmtCompact(myDemand)} seats
-                </div>
-              </div>
-              <div className="hm">
-                <div className="k">Capacity</div>
-                <div className="v" style={{ fontSize: 15, color: capacity < myDemand ? 'var(--warn-text)' : undefined }}>
-                  {fmtCompact(capacity)} seats
-                </div>
-              </div>
-              <div className="hm">
-                <div className="k">License rev / wk</div>
-                <div className="v" style={{ fontSize: 15 }}>
-                  {fmtMoney(pnl.licenseRevenue)}
-                </div>
-              </div>
-            </div>
-            <div className="note" style={{ marginTop: 8 }}>
-              Demand follows capability gap vs. rivals × adoption × price. {capacity < myDemand ? 'You are capacity-limited — free up inference chips or buy compute.' : 'Raising the price trades seats for margin.'}
-            </div>
-          </div>
-        </div>
+        <PricingPanel />
       </div>
 
       <div className="col">

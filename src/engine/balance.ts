@@ -151,6 +151,15 @@ export const BAL = {
    */
   CHIP_OPEX_SOFT_FLEET: 600_000,
   CHIP_OPEX_STRAIN: 0.6,
+  /**
+   * Capability at which grid-strain relief begins. Below this the soft cap is a
+   * flat 600k (the fleet-maxxing cheese freezes capability well under it, so it
+   * gets zero relief and the runaway stays dead). Set high so only near-frontier
+   * labs — which earn far more revenue per chip — see softened upkeep.
+   */
+  CHIP_OPEX_CAP_BASE: 70,
+  /** each capability point past CHIP_OPEX_CAP_BASE lifts the strain soft cap by this fraction of 600k */
+  CHIP_OPEX_CAP_RELIEF: 0.05,
   /** obsolescence: fleet efficiency multiplier decays to this floor */
   CHIP_EFF_DECAY_PER_WEEK: 0.0012,
   CHIP_EFF_FLOOR: 0.55,

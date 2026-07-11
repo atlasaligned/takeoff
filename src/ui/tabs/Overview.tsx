@@ -8,7 +8,7 @@ import { fmtCompact, fmtFlop, fmtMoney, fmtWeeks } from '../format';
 import { Icon } from '../icons';
 import { ResearchIcon } from '../researchIcons';
 import { ComputePanel } from '../ComputePanel';
-import { BuyComputePanel, EnterprisePanel, FundraisingPanel } from '../FinancePanels';
+import { BuyComputePanel, EnterprisePanel, FundraisingPanel, PricingPanel } from '../FinancePanels';
 import { useGame, useSt } from '../useGame';
 
 export function OverviewTab() {
@@ -16,6 +16,7 @@ export function OverviewTab() {
     <div className="hub2">
       <div className="col">
         <FlagshipPanel />
+        <PricingPanel compact />
         <EnterprisePanel compact />
         <FundraisingPanel compact />
       </div>
