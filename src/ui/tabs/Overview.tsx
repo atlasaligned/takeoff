@@ -8,7 +8,7 @@ import { fmtCompact, fmtFlop, fmtMoney, fmtWeeks } from '../format';
 import { Icon } from '../icons';
 import { ResearchIcon } from '../researchIcons';
 import { ComputePanel } from '../ComputePanel';
-import { BuyComputePanel, FundraisingPanel } from '../FinancePanels';
+import { BuyComputePanel, EnterprisePanel, FundraisingPanel } from '../FinancePanels';
 import { useGame, useSt } from '../useGame';
 
 export function OverviewTab() {
@@ -16,6 +16,7 @@ export function OverviewTab() {
     <div className="hub2">
       <div className="col">
         <FlagshipPanel />
+        <EnterprisePanel compact />
         <FundraisingPanel compact />
       </div>
 
@@ -120,8 +121,8 @@ function NextMovesPanel() {
   const cap = flagship(player)?.capability ?? 0;
   const research = nextResearchPicks(st, 3);
   const treaties = nextTreatyPicks(st, 3);
-  const agreeP = agreementProbability(st);
-  const readyActions = SMALL_ACTIONS.filter((a) => smallActionReady(st, a.id) && player.cash >= a.cost);
+  const agreeP = agreementProbability(st, player);
+  const readyActions = SMALL_ACTIONS.filter((a) => smallActionReady(st, player, a.id) && player.cash >= a.cost);
 
   return (
     <div className="panel">
@@ -169,7 +170,7 @@ function NextMovesPanel() {
         </div>
         {treaties.map((id) => {
           const t = TREATY_BY_ID[id];
-          const blocked = treatyBlocked(st, id);
+          const blocked = treatyBlocked(st, player, id);
           return (
             <button key={id} className="nxrow" onClick={() => game.goTab('diplomacy', id)}>
               <span className="ricon-wrap">

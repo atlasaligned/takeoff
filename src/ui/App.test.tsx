@@ -20,6 +20,9 @@ function midGame(): GameState {
     while (state.pendingEvents.length > 0) respondToEvent(state, state.pendingEvents[0].choices[0].id);
     advanceWeek(state);
   }
+  // Drain any event the final advance queued so the fixture is seed-independent:
+  // the modal/notice/game-over tests all assume no event is pending.
+  while (state.pendingEvents.length > 0) respondToEvent(state, state.pendingEvents[0].choices[0].id);
   return state;
 }
 
@@ -41,6 +44,8 @@ function fakeGame(state: GameState, tab: TabId, notices: Game['notices'] = []): 
     startTutorial: () => {},
     load: () => false,
     save: () => {},
+    saveNamed: () => false,
+    loadNamed: () => false,
     quitToMenu: () => {},
   };
 }

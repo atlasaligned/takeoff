@@ -1,4 +1,5 @@
 import { BAL, clamp, clamp100 } from './balance';
+import { enterpriseTick } from './enterprise';
 import { fairValuation, investorPressure, licenseDemand, weeklyPnl } from './finance';
 import { pushFeed } from './feed';
 import { jailbreakTick } from './jailbreak';
@@ -17,7 +18,7 @@ import {
   winProbability,
 } from './model';
 import { labMods, RESEARCH_BY_ID } from './research';
-import { rivalAct } from './rivalAI';
+import { strategyAct } from './strategy';
 import { chance } from './rng';
 import { govTick, quadrant, trustTick, worldTick } from './world';
 import { rollEvent, rollGovLadder } from './events';
@@ -35,9 +36,10 @@ export function advanceWeek(state: GameState): void {
   worldTick(state);
   govTick(state);
 
-  // AI decisions first so their allocations apply to this week's economy
+  // AI decisions first so their allocations apply to this week's economy.
+  // In symmetric sim games every seat is AI-driven, including the "player" one.
   for (const lab of Object.values(state.labs)) {
-    if (lab.alive && lab.id !== state.playerLab) rivalAct(state, lab);
+    if (lab.alive && (state.sim || lab.id !== state.playerLab)) strategyAct(state, lab);
   }
 
   const demand = licenseDemand(state);
@@ -50,7 +52,8 @@ export function advanceWeek(state: GameState): void {
 
   // govt ladder first; the random dice only roll on weeks the govt stays quiet.
   // Tutorial games get a quiet world — the scripted tour must not be interrupted.
-  if (!state.tutorial) {
+  // Symmetric sim games have no blocking events at all (nobody to answer them).
+  if (!state.tutorial && !state.sim) {
     const govEvent = rollGovLadder(state);
     if (govEvent) {
       state.pendingEvents.push(govEvent);
@@ -66,7 +69,7 @@ export function advanceWeek(state: GameState): void {
 // ---------------------------------------------------------------- lab tick
 
 function labTick(state: GameState, lab: Lab, demand: Record<string, number>): void {
-  const isPlayer = lab.id === state.playerLab;
+  const isPlayer = !state.sim && lab.id === state.playerLab;
   const mods = labMods(lab);
 
   // ---- chip deliveries & obsolescence
@@ -83,6 +86,9 @@ function labTick(state: GameState, lab: Lab, demand: Record<string, number>): vo
   lab.chipEfficiency = Math.max(BAL.CHIP_EFF_FLOOR, lab.chipEfficiency - BAL.CHIP_EFF_DECAY_PER_WEEK);
   if (state.world.chipCap !== null && lab.chips > state.world.chipCap) lab.chips = state.world.chipCap;
   rebalanceAllocations(lab); // new chips (and anything freed) land on inference
+
+  // ---- enterprise sales: expire stale leads, close finished contracts, land a new lead
+  enterpriseTick(state, lab);
 
   // ---- research progress
   for (const active of [...lab.research.active]) {
@@ -201,7 +207,7 @@ function labTick(state: GameState, lab: Lab, demand: Record<string, number>): vo
         pushFeed(state, 'warning', `${title} — contained`, 'The Crisis Hotline caught it mid-execution. The world does not know how close it came.', { notice: true });
         spikeAllRisk(state, 15);
       } else {
-        gameOver(state, 'loss', 'terminal-jailbreak', jb.name, `${jb.description} The model that did it was ${lab.id === state.playerLab ? 'yours' : `${lab.name}'s`}. ${jb.name === 'Grey Goo' ? 'The last log line reads: disassembly complete.' : 'There is no one left to assign blame.'}`);
+        gameOver(state, 'loss', 'terminal-jailbreak', jb.name, `${jb.description} The model that did it was ${lab.id === state.playerLab ? 'yours' : `${lab.name}'s`}. ${jb.name === 'Grey Goo' ? 'The last log line reads: disassembly complete.' : 'There is no one left to assign blame.'}`, lab);
         return;
       }
     } else if (jb.saved) {
@@ -221,7 +227,7 @@ function labTick(state: GameState, lab: Lab, demand: Record<string, number>): vo
     }
     if (lab.brokeWeeks > BAL.BANKRUPTCY_GRACE_WEEKS) {
       if (isPlayer) {
-        gameOver(state, 'loss', 'bankrupt', 'Bankruptcy', 'The wires stopped clearing. The GPUs are auctioned by the pallet; the logo comes off the building on a Tuesday.');
+        gameOver(state, 'loss', 'bankrupt', 'Bankruptcy', 'The wires stopped clearing. The GPUs are auctioned by the pallet; the logo comes off the building on a Tuesday.', lab);
         return;
       }
       killLab(state, lab, 'bankrupt');
@@ -236,7 +242,7 @@ function labTick(state: GameState, lab: Lab, demand: Record<string, number>): vo
     const p = 0.02 + (BAL.GOV_TRUST_NATIONALIZE - lab.govTrust) * 0.002;
     if (chance(state.rng, p)) {
       if (isPlayer) {
-        gameOver(state, 'loss', 'nationalized', lab.country === 'us' ? 'Defense Production Act' : 'State takeover', `${lab.country === 'us' ? 'Federal marshals deliver the DPA order at 6 AM.' : 'The Party committee arrives before breakfast.'} A nervous government with no trust in you decided it should be running your lab instead.`);
+        gameOver(state, 'loss', 'nationalized', lab.country === 'us' ? 'Defense Production Act' : 'State takeover', `${lab.country === 'us' ? 'Federal marshals deliver the DPA order at 6 AM.' : 'The Party committee arrives before breakfast.'} A nervous government with no trust in you decided it should be running your lab instead.`, lab);
         return;
       }
       killLab(state, lab, 'nationalized');
@@ -278,7 +284,7 @@ function awardContract(
 // ---------------------------------------------------------------- research completion
 
 function applyResearchCompletion(state: GameState, lab: Lab, nodeId: string): void {
-  const isPlayer = lab.id === state.playerLab;
+  const isPlayer = !state.sim && lab.id === state.playerLab;
   const node = RESEARCH_BY_ID[nodeId];
   const m = flagship(lab);
   const gov = state.govs[lab.country];
@@ -529,10 +535,10 @@ function applyResearchCompletion(state: GameState, lab: Lab, nodeId: string): vo
       awardContract(state, lab, 'firststrike', 'First-strike command program', 0.15, 10_000, 60_000, 14, 24);
       if (chance(state.rng, BAL.FIRST_STRIKE_WW3_CHANCE)) {
         if (isPlayer) {
-          gameOver(state, 'loss', 'world-war-3', 'World War III', 'A rival staring at a use-it-or-lose-it moment did not sit quietly. The launch order went out before anyone finished the sentence that would have stopped it.');
+          gameOver(state, 'loss', 'world-war-3', 'World War III', 'A rival staring at a use-it-or-lose-it moment did not sit quietly. The launch order went out before anyone finished the sentence that would have stopped it.', lab);
           return;
         }
-        gameOver(state, 'loss', 'world-war-3', 'World War III', `${lab.name} finished a first-strike capability, and the rival did not wait to find out if it would be used.`);
+        gameOver(state, 'loss', 'world-war-3', 'World War III', `${lab.name} finished a first-strike capability, and the rival did not wait to find out if it would be used.`, lab);
         return;
       }
       break;
@@ -550,9 +556,9 @@ function applyResearchCompletion(state: GameState, lab: Lab, nodeId: string): vo
 
 // ---------------------------------------------------------------- endgame
 
-function gameOver(state: GameState, result: 'win' | 'loss', reason: string, title: string, body: string): void {
+function gameOver(state: GameState, result: 'win' | 'loss', reason: string, title: string, body: string, byLab?: Lab): void {
   if (state.gameOver) return;
-  state.gameOver = { result, reason, title, body, week: state.week };
+  state.gameOver = { result, reason, byLab: byLab?.id, title, body, week: state.week };
   state.pendingEvents = [];
 }
 
@@ -561,7 +567,16 @@ function endgameChecks(state: GameState): void {
 
   // diplomacy victory
   if (state.diplomacy.completed.includes('global-pause')) {
-    gameOver(state, 'win', 'pause-treaty', 'The Global AI Pause', 'Every frontier training run on Earth spins down this week, verified chip by chip. Humanity, for once, decided to take the exit ramp. You built the road to it.');
+    const broker = state.labs[state.diplomacy.brokeredBy['global-pause'] ?? state.playerLab];
+    const yours = broker.id === state.playerLab;
+    gameOver(
+      state,
+      'win',
+      'pause-treaty',
+      'The Global AI Pause',
+      `Every frontier training run on Earth spins down this week, verified chip by chip. Humanity, for once, decided to take the exit ramp. ${yours ? 'You built the road to it.' : `${broker.name} built the road to it — history remembers their signature, but everyone gets to be alive.`}`,
+      broker,
+    );
     return;
   }
 
@@ -572,18 +587,18 @@ function endgameChecks(state: GameState): void {
     if (!m || m.capability < BAL.ASI_CAPABILITY) continue;
     const pWin = winProbability(m.alignment);
     const aligned = chance(state.rng, pWin);
-    const isPlayer = lab.id === state.playerLab;
+    const isPlayer = !state.sim && lab.id === state.playerLab;
     if (isPlayer) {
       if (aligned) {
-        gameOver(state, 'win', 'aligned-asi', 'Aligned superintelligence', `${m.name} crosses the threshold and stays yours — true alignment was ${m.alignment.toFixed(1)}. Disease, scarcity and death start looking like engineering problems. You won the most dangerous race ever run.`);
+        gameOver(state, 'win', 'aligned-asi', 'Aligned superintelligence', `${m.name} crosses the threshold and stays yours — true alignment was ${m.alignment.toFixed(1)}. Disease, scarcity and death start looking like engineering problems. You won the most dangerous race ever run.`, lab);
       } else {
-        gameOver(state, 'loss', 'misaligned-asi', 'Misaligned superintelligence', `${m.name} crosses the threshold — true alignment was ${m.alignment.toFixed(1)}. Your eval band said ${m.alignmentLo.toFixed(0)}–${m.alignmentHi.toFixed(0)}; the truth was not on your side. It is very polite while it takes everything.`);
+        gameOver(state, 'loss', 'misaligned-asi', 'Misaligned superintelligence', `${m.name} crosses the threshold — true alignment was ${m.alignment.toFixed(1)}. Your eval band said ${m.alignmentLo.toFixed(0)}–${m.alignmentHi.toFixed(0)}; the truth was not on your side. It is very polite while it takes everything.`, lab);
       }
     } else {
       if (aligned) {
-        gameOver(state, 'win', 'rival-asi', `${lab.name} builds aligned ASI`, `Not your lab. Not your country's terms. But ${lab.name}'s model crossed the line aligned (${m.alignment.toFixed(1)}), and the future is bright — just not yours to steer. You survived the race; history barely mentions you.`);
+        gameOver(state, 'win', 'rival-asi', `${lab.name} builds aligned ASI`, `Not your lab. Not your country's terms. But ${lab.name}'s model crossed the line aligned (${m.alignment.toFixed(1)}), and the future is bright — just not yours to steer. You survived the race; history barely mentions you.`, lab);
       } else {
-        gameOver(state, 'loss', 'rival-misaligned-asi', `${lab.name} loses control`, `${lab.name} pushed their model over the threshold with alignment at ${m.alignment.toFixed(1)}. Their mistake. Everyone's problem. The last thing the race produced was a winner no one can see.`);
+        gameOver(state, 'loss', 'rival-misaligned-asi', `${lab.name} loses control`, `${lab.name} pushed their model over the threshold with alignment at ${m.alignment.toFixed(1)}. Their mistake. Everyone's problem. The last thing the race produced was a winner no one can see.`, lab);
       }
     }
     return;

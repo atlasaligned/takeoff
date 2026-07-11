@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { respondToEvent } from './actions';
 import { flagship, winProbability } from './model';
 import { newGame } from './init';
-import { deserialize, serialize } from './save';
+import { deserialize, saveSummary, serialize } from './save';
 import { advanceWeek, isPaused } from './tick';
 import type { GameState } from './types';
 
@@ -51,7 +51,8 @@ describe('advanceWeek', () => {
       expect(m.alignmentHi).toBeGreaterThanOrEqual(m.alignment);
       expect(m.robustness).toBeGreaterThanOrEqual(0);
       expect(m.robustness).toBeLessThanOrEqual(100);
-      const committed = lab.contracts.reduce((s, c) => s + c.chips, 0) + (lab.run?.chips ?? 0) + (lab.postTraining?.chips ?? 0);
+      const committed =
+        lab.contracts.reduce((s, c) => s + c.chips, 0) + lab.enterprise.reduce((s, c) => s + c.chips, 0) + (lab.run?.chips ?? 0) + (lab.postTraining?.chips ?? 0);
       expect(lab.alloc.inference + lab.alloc.alignment).toBe(Math.max(0, lab.chips - committed)); // no idle, no overcommit
       expect(lab.publicTrust).toBeGreaterThanOrEqual(0);
       expect(lab.publicTrust).toBeLessThanOrEqual(100);
@@ -182,5 +183,17 @@ describe('save/load', () => {
   it('rejects garbage', () => {
     expect(() => deserialize('{"version": 99}')).toThrow();
     expect(() => deserialize('{}')).toThrow();
+  });
+
+  it('saveSummary describes the player lab', () => {
+    const state = newGame('helios', 12);
+    autoPlay(state, 20);
+    const sum = saveSummary(state);
+    expect(sum.labName).toBe(state.labs.helios.name);
+    expect(sum.week).toBe(state.week);
+    expect(sum.dateLabel.length).toBeGreaterThan(0);
+    expect(sum.capability).toBeGreaterThan(0);
+    expect(sum.cash).toBe(state.labs.helios.cash);
+    expect(sum.gameOver).toBeNull();
   });
 });

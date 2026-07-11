@@ -144,78 +144,87 @@ export const TREATIES: TreatyNode[] = [
 
 export const TREATY_BY_ID: Record<string, TreatyNode> = Object.fromEntries(TREATIES.map((t) => [t.id, t]));
 
-/** The 2nd-strongest rival lab (by flagship capability) — the treaty gatekeeper. */
-export function treatyGatekeeper(state: GameState): Lab | null {
+/** The strongest OTHER lab (by flagship capability) — the treaty gatekeeper for `lab`. */
+export function treatyGatekeeper(state: GameState, lab: Lab): Lab | null {
   const rivals = Object.values(state.labs)
-    .filter((l) => l.alive && l.id !== state.playerLab)
+    .filter((l) => l.alive && l.id !== lab.id)
     .sort((a, b) => (flagship(b)?.capability ?? 0) - (flagship(a)?.capability ?? 0));
   // the strongest rival has the most to lose from freezing the race
   return rivals[0] ?? null;
 }
 
-export function agreementProbability(state: GameState): number {
-  const player = state.labs[state.playerLab];
-  const keeper = treatyGatekeeper(state);
+export function agreementProbability(state: GameState, lab: Lab): number {
+  const keeper = treatyGatekeeper(state, lab);
   if (!keeper) return 0.95;
   const keeperCap = flagship(keeper)?.capability ?? 0;
   // distance from parity in EITHER direction hurts: a rival far ahead of you
   // refuses to freeze its lead, and a rival far BEHIND you refuses to lock in
   // your lead — agreement is likeliest near parity. This closes the
   // "run ahead, then pause to cash the lead as a win" exploit.
-  const gap = Math.abs(keeperCap - (flagship(player)?.capability ?? 0));
+  const gap = Math.abs(keeperCap - (flagship(lab)?.capability ?? 0));
   // the diplomatic window also shuts as the frontier itself approaches ASI
   const window = clamp((100 - keeperCap) / BAL.TREATY_ASI_WINDOW, 0, 1);
   return clamp((BAL.TREATY_BASE - gap * BAL.TREATY_GAP_WEIGHT) * window, 0.02, 0.95);
 }
 
-/** Why can't the player sign this treaty right now? null = they can. */
-export function treatyBlocked(state: GameState, id: string): string | null {
+/** Why can't `lab` sign this treaty right now? null = it can. */
+export function treatyBlocked(state: GameState, lab: Lab, id: string): string | null {
   const t = TREATY_BY_ID[id];
   if (!t) return 'unknown treaty';
-  const player = state.labs[state.playerLab];
   if (state.diplomacy.completed.includes(id)) return 'already in force';
   for (const p of t.prereqs) {
     if (!state.diplomacy.completed.includes(p)) return `needs ${TREATY_BY_ID[p].name}`;
   }
   if (t.researchReqs) {
     for (const r of t.researchReqs) {
-      if (!player.research.completed.includes(r)) return `needs research: ${RESEARCH_BY_ID[r]?.name ?? r}`;
+      if (!lab.research.completed.includes(r)) return `needs research: ${RESEARCH_BY_ID[r]?.name ?? r}`;
     }
   }
-  if (t.minRiskFear !== undefined && state.govs[player.country].riskFear < t.minRiskFear) {
-    return `needs ${player.country === 'us' ? 'US' : 'PRC'} risk fear ≥ ${t.minRiskFear}`;
+  if (t.minRiskFear !== undefined && state.govs[lab.country].riskFear < t.minRiskFear) {
+    return `needs ${lab.country === 'us' ? 'US' : 'PRC'} risk fear ≥ ${t.minRiskFear}`;
   }
-  if ((state.diplomacy.cooldowns[`treaty-${id}`] ?? 0) > state.week) {
+  // the capstone summits seat whoever built the institutions — you can't
+  // free-ride a rival's treaty track and snipe the signature at the end
+  if (t.tier >= 3 && t.prereqs.length > 0 && !t.prereqs.some((p) => state.diplomacy.brokeredBy[p] === lab.id)) {
+    return 'no seat at these talks — broker a prerequisite treaty first';
+  }
+  // nobody freezes the race INTO your compute lead: with the biggest fleet at
+  // the table by a clear margin, the gatekeeper walks before talks begin
+  if (id === 'compute-cap-treaty') {
+    const biggestRival = Math.max(0, ...Object.values(state.labs).filter((l) => l.alive && l.id !== lab.id).map((l) => l.chips));
+    if (lab.chips > biggestRival * BAL.TREATY_CAP_FLEET_LEAD) return 'rivals refuse to freeze in your compute lead';
+  }
+  if ((state.diplomacy.cooldowns[`${lab.id}:treaty-${id}`] ?? 0) > state.week) {
     return 'talks recently collapsed — wait';
   }
-  if (player.cash < t.cost) return 'not enough cash';
+  if (lab.cash < t.cost) return 'not enough cash';
   return null;
 }
 
-/** Apply a successfully signed treaty's effects. */
-export function applyTreaty(state: GameState, id: string): void {
-  const player = state.labs[state.playerLab];
+/** Apply a successfully signed treaty's effects. `signer` is the brokering lab. */
+export function applyTreaty(state: GameState, signer: Lab, id: string): void {
   state.diplomacy.completed.push(id);
+  state.diplomacy.brokeredBy[id] = signer.id;
   const allGovs = Object.values(state.govs);
   const dropRace = (n: number) => allGovs.forEach((g) => (g.raceFear = clamp(g.raceFear - n, BAL.FEAR_FLOOR, 100)));
   switch (id) {
     case 'transparency-pledge':
-      player.publicTrust = clamp100(player.publicTrust + 6);
-      player.govTrust = clamp100(player.govTrust + 3);
+      signer.publicTrust = clamp100(signer.publicTrust + 6);
+      signer.govTrust = clamp100(signer.govTrust + 3);
       // your disclosures help rivals patch their own weaknesses — they close a sliver of the gap
       for (const lab of Object.values(state.labs)) {
-        if (lab.id === state.playerLab) continue;
+        if (lab.id === signer.id) continue;
         const m = flagship(lab);
         if (m) m.capability = Math.min(BAL.ASI_CAPABILITY, m.capability + BAL.TRANSPARENCY_RIVAL_CAP_GAIN);
       }
       break;
     case 'incident-reporting':
-      player.publicTrust = clamp100(player.publicTrust + 6);
+      signer.publicTrust = clamp100(signer.publicTrust + 6);
       dropRace(4);
       break;
     case 'responsible-scaling':
-      player.govTrust = clamp100(player.govTrust + 7);
-      player.publicTrust = clamp100(player.publicTrust + 5);
+      signer.govTrust = clamp100(signer.govTrust + 7);
+      signer.publicTrust = clamp100(signer.publicTrust + 5);
       break;
     case 'joint-safety-institute':
       for (const lab of Object.values(state.labs)) {
@@ -268,8 +277,8 @@ export const SMALL_ACTIONS: SmallAction[] = [
   { id: 'backchannel', name: 'Backchannel Negotiations', effect: '−race fear, target · leak risk', cost: BAL.BACKCHANNEL_COST, cooldown: BAL.BACKCHANNEL_COOLDOWN, needsTarget: true },
 ];
 
-export function smallActionReady(state: GameState, id: string): boolean {
-  return (state.diplomacy.cooldowns[id] ?? 0) <= state.week;
+export function smallActionReady(state: GameState, lab: Lab, id: string): boolean {
+  return (state.diplomacy.cooldowns[`${lab.id}:${id}`] ?? 0) <= state.week;
 }
 
 export interface AlarmEffect {
@@ -277,15 +286,14 @@ export interface AlarmEffect {
   weeks: number;
 }
 
-export function applySmallAction(state: GameState, id: string, target: GovId | null): string {
-  const player = state.labs[state.playerLab];
+export function applySmallAction(state: GameState, lab: Lab, id: string, target: GovId | null): string {
   const action = SMALL_ACTIONS.find((a) => a.id === id);
   if (!action) return 'unknown action';
-  player.cash -= action.cost;
-  state.diplomacy.cooldowns[id] = state.week + action.cooldown;
+  lab.cash -= action.cost;
+  state.diplomacy.cooldowns[`${lab.id}:${id}`] = state.week + action.cooldown;
   switch (id) {
     case 'charm': {
-      const gov = state.govs[target ?? player.country];
+      const gov = state.govs[target ?? lab.country];
       gov.raceFear = clamp(gov.raceFear - BAL.CHARM_RACE_FEAR, BAL.FEAR_FLOOR, 100);
       return `Charm offensive: ${gov.id.toUpperCase()} race fear −${BAL.CHARM_RACE_FEAR}`;
     }
@@ -295,12 +303,12 @@ export function applySmallAction(state: GameState, id: string, target: GovId | n
     }
     case 'alarm': {
       for (const g of Object.values(state.govs)) g.riskFear = clamp(g.riskFear + BAL.ALARM_RISK_FEAR, BAL.FEAR_FLOOR, 100);
-      player.publicTrust = clamp100(player.publicTrust + BAL.ALARM_PUBLIC_TRUST);
-      player.lawsuits.push({ name: 'Enterprise churn after doomer press tour', weeklyCost: player.weeklyRevenue * BAL.ALARM_REVENUE_HIT, weeksLeft: BAL.ALARM_REVENUE_WEEKS });
-      return `You sounded the alarm: risk fear +${BAL.ALARM_RISK_FEAR} everywhere, public trust +${BAL.ALARM_PUBLIC_TRUST}`;
+      lab.publicTrust = clamp100(lab.publicTrust + BAL.ALARM_PUBLIC_TRUST);
+      lab.lawsuits.push({ name: 'Enterprise churn after doomer press tour', weeklyCost: lab.weeklyRevenue * BAL.ALARM_REVENUE_HIT, weeksLeft: BAL.ALARM_REVENUE_WEEKS });
+      return `${lab.name} sounded the alarm: risk fear +${BAL.ALARM_RISK_FEAR} everywhere, public trust +${BAL.ALARM_PUBLIC_TRUST}`;
     }
     case 'backchannel': {
-      const targetId = target ?? (player.country === 'us' ? 'prc' : 'us');
+      const targetId = target ?? (lab.country === 'us' ? 'prc' : 'us');
       const gov = state.govs[targetId];
       gov.raceFear = clamp(gov.raceFear - BAL.BACKCHANNEL_RACE_FEAR, BAL.FEAR_FLOOR, 100);
       if (chance(state.rng, BAL.BACKCHANNEL_LEAK_CHANCE)) {

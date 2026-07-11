@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { advanceWeek, isPaused } from '../engine/tick';
 import { deserialize, serialize } from '../engine/save';
+import { readSave, writeSave } from './saves';
 import { newGame, newTutorialGame } from '../engine/init';
 import type { ActionResult } from '../engine/actions';
 import type { FeedItem, GameState, LabId } from '../engine/types';
@@ -33,6 +34,9 @@ export interface Game {
   startTutorial: () => void;
   load: () => boolean;
   save: () => void;
+  /** write the running game to a named slot (overwrites a same-named slot) */
+  saveNamed: (name: string) => boolean;
+  loadNamed: (name: string) => boolean;
   quitToMenu: () => void;
 }
 
@@ -166,6 +170,39 @@ export function useGameController(): Game {
     }
   }, [bump]);
 
+  const saveNamed = useCallback(
+    (name: string): boolean => {
+      const s = stateRef.current;
+      if (!s) return false;
+      if (s.tutorial) {
+        showToast('Tutorial games cannot be saved', true);
+        return false;
+      }
+      const ok = writeSave(name, s);
+      showToast(ok ? `Saved "${name}"` : 'Save failed — storage unavailable', !ok);
+      return ok;
+    },
+    [showToast],
+  );
+
+  const loadNamed = useCallback(
+    (name: string): boolean => {
+      const s = readSave(name);
+      if (!s) {
+        showToast(`Could not load "${name}"`, true);
+        return false;
+      }
+      stateRef.current = s;
+      noticesRef.current = [];
+      noticeSeen.current = s.feedCounter;
+      setTab('overview');
+      setSpeedRaw(0);
+      bump();
+      return true;
+    },
+    [bump, showToast],
+  );
+
   const quitToMenu = useCallback(() => {
     save();
     stateRef.current = null;
@@ -191,6 +228,8 @@ export function useGameController(): Game {
     startTutorial,
     load,
     save,
+    saveNamed,
+    loadNamed,
     quitToMenu,
   };
 }

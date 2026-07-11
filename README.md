@@ -31,6 +31,7 @@ src/engine/    pure TypeScript, zero React/DOM imports
   rivalAI.ts     weekly decision pass for AI labs (same actions as the player)
   model.ts       capability curve, training runs, alignment band, win roll, RSI
   finance.ts     licenses/demand, P&L, valuation, fundraising
+  enterprise.ts  enterprise sales: leads, conversion, fixed-term contracts
   research.ts    tech tree data + derived modifiers (labMods)
   diplomacy.ts   treaty tree + small actions
   jailbreak.ts   weekly jailbreak rolls, severity ladder, counters

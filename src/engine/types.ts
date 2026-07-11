@@ -94,6 +94,38 @@ export interface GovContract {
   startedWeek: number;
 }
 
+/** An enterprise customer shopping for a deal. Pursue it or it walks. */
+export interface EnterpriseLead {
+  id: string;
+  /** customer name */
+  name: string;
+  /** requires a fine-tuned model: pricier, longer, bigger */
+  fineTune: boolean;
+  /** one-off cash cost to pursue, paid win or lose */
+  cashCost: number;
+  /** chips locked into the deployment for the duration (returned at expiry) */
+  chips: number;
+  /** true conversion probability, shown to the player as-is */
+  odds: number;
+  weeklyPay: number; // $M / week
+  durationWeeks: number;
+  /** lead disappears if not pursued by this week */
+  expiresWeek: number;
+}
+
+/** A won enterprise deal: fixed-duration weekly revenue on locked chips. */
+export interface EnterpriseContract {
+  id: string;
+  name: string;
+  fineTune: boolean;
+  weeklyPay: number; // $M / week
+  chips: number; // locked until endsWeek, then released
+  startedWeek: number;
+  endsWeek: number;
+  /** model the fine-tune was built from (deployment portfolio display) */
+  modelName: string | null;
+}
+
 export interface RevenueExpectation {
   target: number; // $M / week
   deadlineWeek: number;
@@ -157,6 +189,11 @@ export interface Lab {
   rsiRate: number;
 
   contracts: GovContract[];
+  /** open enterprise leads waiting for a pursue/ignore call */
+  leads: EnterpriseLead[];
+  /** running enterprise contracts (chips locked until endsWeek) */
+  enterprise: EnterpriseContract[];
+  leadCounter: number;
   lawsuits: { name: string; weeklyCost: number; weeksLeft: number }[];
 
   /** govt crackdown: big training runs slowed while true */
@@ -186,6 +223,8 @@ export interface Lab {
 
   /** AI profile; unused for the player lab */
   profile: RivalProfile;
+  /** named strategy driving this lab when AI-controlled (see engine/strategy.ts) */
+  strategy?: string;
 }
 
 export interface Government {
@@ -261,7 +300,9 @@ export interface GovLadderState {
 
 export interface DiplomacyState {
   completed: string[];
-  /** small action cooldowns, week until usable */
+  /** which lab brokered each completed treaty */
+  brokeredBy: Partial<Record<string, LabId>>;
+  /** small-action / treaty-talks cooldowns, keyed `${labId}:${actionId}`, week until usable */
   cooldowns: Record<string, number>;
 }
 
@@ -278,6 +319,8 @@ export interface GameOver {
   result: 'win' | 'loss';
   /** short machine tag, e.g. 'aligned-asi', 'pause-treaty', 'rival-asi', 'bankrupt' ... */
   reason: string;
+  /** the lab that caused the ending (ASI builder, pause broker, jailbroken lab...) */
+  byLab?: LabId;
   title: string;
   body: string;
   week: number;
@@ -307,4 +350,9 @@ export interface GameState {
   hintsEnabled: boolean;
   /** guided tutorial game: random events are suppressed and the game is never saved */
   tutorial?: boolean;
+  /**
+   * symmetric headless simulation (tournament harness): no blocking events,
+   * no player special-casing — every lab is AI-driven and plays by rival rules
+   */
+  sim?: boolean;
 }

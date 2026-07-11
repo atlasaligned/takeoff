@@ -25,8 +25,8 @@ export function ComputePanel() {
   const st = useSt();
   const player = st.labs[st.playerLab];
 
-  const reserved = player.contracts.reduce((s, c) => s + c.chips, 0);
-  const contractPay = player.contracts.reduce((s, c) => s + c.weeklyPay, 0);
+  const reserved = player.contracts.reduce((s, c) => s + c.chips, 0) + player.enterprise.reduce((s, c) => s + c.chips, 0);
+  const contractPay = player.contracts.reduce((s, c) => s + c.weeklyPay, 0) + player.enterprise.reduce((s, c) => s + c.weeklyPay, 0);
   const runChips = player.run?.chips ?? 0;
   const ptChips = player.postTraining?.chips ?? 0;
   const a = player.alloc;

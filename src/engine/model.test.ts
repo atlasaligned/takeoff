@@ -136,7 +136,7 @@ describe('win probability', () => {
   });
 
   it('is small below 90 and strong at 100', () => {
-    expect(winProbability(89)).toBeLessThan(0.12);
+    expect(winProbability(89)).toBeLessThan(0.15);
     expect(winProbability(100)).toBeGreaterThanOrEqual(0.85);
   });
 

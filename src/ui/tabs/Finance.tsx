@@ -1,7 +1,7 @@
 import { setLicensePrice } from '../../engine/actions';
 import { chipPriceFor, licenseDemand, serveCapacity, weeklyPnl } from '../../engine/finance';
 import { fmtCompact, fmtMoney } from '../format';
-import { FundraisingPanel, PnlPanel } from '../FinancePanels';
+import { EnterprisePanel, FundraisingPanel, PnlPanel } from '../FinancePanels';
 import { Icon } from '../icons';
 import { useGame, useSt } from '../useGame';
 
@@ -74,6 +74,7 @@ export function FinanceTab() {
       </div>
 
       <div className="col">
+        <EnterprisePanel />
         <FundraisingPanel />
       </div>
 

@@ -253,7 +253,12 @@ export function rsiTick(lab: Lab): void {
 
 /** Chips committed to contracts, the active run and post-training — not splittable. */
 export function committedChips(lab: Lab): number {
-  return lab.contracts.reduce((s, c) => s + c.chips, 0) + (lab.run?.chips ?? 0) + (lab.postTraining?.chips ?? 0);
+  return (
+    lab.contracts.reduce((s, c) => s + c.chips, 0) +
+    lab.enterprise.reduce((s, c) => s + c.chips, 0) +
+    (lab.run?.chips ?? 0) +
+    (lab.postTraining?.chips ?? 0)
+  );
 }
 
 /**

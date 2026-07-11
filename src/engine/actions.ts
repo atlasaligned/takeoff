@@ -114,6 +114,31 @@ export function orderChips(state: GameState, lab: Lab, count: number): ActionRes
   return ok(`ordered ${count.toLocaleString()} chips for $${(cost / 1000).toFixed(2)}B`);
 }
 
+/** Pursue an enterprise lead: cash is spent win or lose; success locks chips into the contract. */
+export function pursueLead(state: GameState, lab: Lab, leadId: string): ActionResult {
+  const lead = lab.leads.find((l) => l.id === leadId);
+  if (!lead) return err('that lead is gone');
+  if (lab.cash < lead.cashCost) return err('not enough cash');
+  if (lab.chips - committedChips(lab) < lead.chips) return err(`needs ${lead.chips.toLocaleString()} free chips to commit`);
+  lab.leads = lab.leads.filter((l) => l !== lead);
+  lab.cash -= lead.cashCost;
+  if (!chance(state.rng, lead.odds)) {
+    return ok(`${lead.name} went with a competitor — $${lead.cashCost}M spent on the pitch`);
+  }
+  lab.enterprise.push({
+    id: lead.id,
+    name: lead.name,
+    fineTune: lead.fineTune,
+    weeklyPay: lead.weeklyPay,
+    chips: lead.chips,
+    startedWeek: state.week,
+    endsWeek: state.week + lead.durationWeeks,
+    modelName: lead.fineTune ? (flagship(lab)?.name ?? null) : null,
+  });
+  rebalanceAllocations(lab);
+  return ok(`${lead.name} signed — $${lead.weeklyPay.toFixed(1)}M/wk for ${lead.durationWeeks} weeks`);
+}
+
 export function setLicensePrice(lab: Lab, price: number): ActionResult {
   if (price < 1 || price > 500) return err('unreasonable price');
   lab.licensePrice = price;
@@ -136,31 +161,30 @@ export function fireStar(lab: Lab, starId: string): ActionResult {
   return ok(`${star.name} let go`);
 }
 
-export function signTreaty(state: GameState, treatyId: string): ActionResult {
-  const blocked = treatyBlocked(state, treatyId);
+export function signTreaty(state: GameState, lab: Lab, treatyId: string): ActionResult {
+  const blocked = treatyBlocked(state, lab, treatyId);
   if (blocked) return err(blocked);
   const t = TREATY_BY_ID[treatyId];
-  const playerLab = state.labs[state.playerLab];
-  playerLab.cash -= t.cost;
+  const isPlayer = lab.id === state.playerLab;
+  lab.cash -= t.cost;
   if (t.needsAgreement) {
-    const p = agreementProbability(state);
+    const p = agreementProbability(state, lab);
     if (!chance(state.rng, p)) {
-      state.diplomacy.cooldowns[`treaty-${treatyId}`] = state.week + BAL.TREATY_FAIL_COOLDOWN;
-      pushFeed(state, 'warning', `${t.name}: talks collapsed`, `The gatekeeper lab walked out (odds were ${(p * 100).toFixed(0)}%). The money is spent; talks can resume in ${BAL.TREATY_FAIL_COOLDOWN} weeks.`);
+      state.diplomacy.cooldowns[`${lab.id}:treaty-${treatyId}`] = state.week + BAL.TREATY_FAIL_COOLDOWN;
+      if (isPlayer) pushFeed(state, 'warning', `${t.name}: talks collapsed`, `The gatekeeper lab walked out (odds were ${(p * 100).toFixed(0)}%). The money is spent; talks can resume in ${BAL.TREATY_FAIL_COOLDOWN} weeks.`);
       return ok(`talks collapsed — ${t.name} not signed`);
     }
   }
-  applyTreaty(state, treatyId);
-  pushFeed(state, 'info', `${t.name} signed`, t.effect);
+  applyTreaty(state, lab, treatyId);
+  pushFeed(state, 'info', `${t.name} signed`, isPlayer ? t.effect : `Brokered by ${lab.name}. ${t.effect}`, isPlayer ? undefined : { tag: 'POLICY' });
   return ok(`${t.name} in force`);
 }
 
-export function smallDiplomacy(state: GameState, actionId: string, target: GovId | null): ActionResult {
-  if (!smallActionReady(state, actionId)) return err('still on cooldown');
-  const playerLab = state.labs[state.playerLab];
-  if (playerLab.cash < 0) return err('not enough cash');
-  const msg = applySmallAction(state, actionId, target);
-  pushFeed(state, 'info', 'Diplomacy', msg);
+export function smallDiplomacy(state: GameState, lab: Lab, actionId: string, target: GovId | null): ActionResult {
+  if (!smallActionReady(state, lab, actionId)) return err('still on cooldown');
+  if (lab.cash < 0) return err('not enough cash');
+  const msg = applySmallAction(state, lab, actionId, target);
+  if (lab.id === state.playerLab) pushFeed(state, 'info', 'Diplomacy', msg);
   return ok(msg);
 }
 

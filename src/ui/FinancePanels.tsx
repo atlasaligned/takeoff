@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { fundraise, orderChips } from '../engine/actions';
+import { fundraise, orderChips, pursueLead } from '../engine/actions';
 import { BAL } from '../engine/balance';
 import { chipDeliveryFor, chipPriceFor, dilutionOf, investorPressure, licenseDemand, maxChipOrder, raiseTerms, runwayWeeks, weeklyPnl } from '../engine/finance';
-import { nextRunPayment } from '../engine/model';
+import { committedChips, nextRunPayment } from '../engine/model';
 import { fmtCompact, fmtDate, fmtMoney, fmtWeeks } from './format';
 import { Icon } from './icons';
 import { useGame, useSt } from './useGame';
@@ -47,6 +47,15 @@ export function PnlPanel() {
                 <td className="num">{fmtMoney(c.weeklyPay)}</td>
               </tr>
             ))}
+            {player.enterprise.length > 0 && (
+              <tr>
+                <td>
+                  Enterprise — {player.enterprise.length} contract{player.enterprise.length > 1 ? 's' : ''}{' '}
+                  <span style={{ color: 'var(--faint)' }}>({fmtCompact(player.enterprise.reduce((s, c) => s + c.chips, 0))} chips locked)</span>
+                </td>
+                <td className="num">{fmtMoney(pnl.enterpriseRevenue)}</td>
+              </tr>
+            )}
           </tbody>
         </table>
         <hr className="hr" />
@@ -203,6 +212,86 @@ export function FundraisingPanel({ compact = false }: { compact?: boolean }) {
                 style={{ width: `${Math.min(100, (100 * player.weeklyRevenue) / player.revenueExpectation.target)}%` }}
               />
             </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Enterprise leads to pursue + running contracts and the fine-tune deployment
+ * portfolio — shared by Overview and Finance. `compact` (Overview) adds a
+ * deeplink to the Finance tab.
+ */
+export function EnterprisePanel({ compact = false }: { compact?: boolean }) {
+  const game = useGame();
+  const st = useSt();
+  const player = st.labs[st.playerLab];
+  const free = player.chips - committedChips(player);
+  const deployments = player.enterprise.filter((c) => c.fineTune);
+
+  return (
+    <div className="panel" data-tut="panel-enterprise">
+      <div className="hd">
+        <h2>
+          <Icon id="i-target" />
+          Enterprise sales
+        </h2>
+        {compact ? (
+          <button className="deeplink" onClick={() => game.goTab('finance')}>
+            Finance →
+          </button>
+        ) : (
+          <span className="tag" style={{ color: 'var(--faint)' }}>
+            {player.enterprise.length} active · {fmtMoney(player.enterprise.reduce((s, c) => s + c.weeklyPay, 0))}/wk
+          </span>
+        )}
+      </div>
+      <div className="bd">
+        {player.leads.length === 0 && <div className="note">No open leads. Enterprise customers come knocking every week or two — pursue them here before they walk.</div>}
+        {player.leads.map((lead) => {
+          const cantCash = player.cash < lead.cashCost;
+          const cantChips = free < lead.chips;
+          return (
+            <div key={lead.id} className="fcard info" style={{ marginBottom: 8, cursor: 'default' }}>
+              <div className="when">
+                LEAD · {lead.fineTune ? 'FINE-TUNE · ' : ''}walks W{lead.expiresWeek}
+              </div>
+              <div className="what">
+                {lead.name} — {fmtMoney(lead.weeklyPay)}/wk for {lead.durationWeeks} wk
+              </div>
+              <div className="fx">
+                <b>{(lead.odds * 100).toFixed(0)}% to convert</b> · costs {fmtMoney(lead.cashCost)} up front (win or lose)
+                {lead.fineTune ? ' — they want a model fine-tuned on their data' : ''} · locks {fmtCompact(lead.chips)} chips for the duration.
+              </div>
+              <div className="btnrow">
+                <button className="btn sm primary" disabled={cantCash || cantChips} onClick={() => game.act((s) => pursueLead(s, s.labs[s.playerLab], lead.id))}>
+                  {cantCash ? 'not enough cash' : cantChips ? `needs ${fmtCompact(lead.chips)} free chips` : 'Pursue the deal'}
+                </button>
+              </div>
+            </div>
+          );
+        })}
+        {player.enterprise.length > 0 && (
+          <>
+            <hr className="hr" />
+            {player.enterprise.map((c) => (
+              <div className="kv" key={c.id}>
+                <span className="k">
+                  {c.name}
+                  {c.fineTune ? ' · FT' : ''}
+                </span>
+                <span className="v">
+                  {fmtMoney(c.weeklyPay)}/wk · {c.endsWeek - st.week} wk left · {fmtCompact(c.chips)} chips
+                </span>
+              </div>
+            ))}
+          </>
+        )}
+        {deployments.length > 0 && (
+          <div className="note" style={{ marginTop: 8 }}>
+            Fine-tuned deployments: {deployments.map((c) => `${c.modelName ?? 'custom model'} @ ${c.name}`).join(' · ')}
           </div>
         )}
       </div>

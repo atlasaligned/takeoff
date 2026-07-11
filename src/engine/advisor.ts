@@ -1,7 +1,8 @@
 import { BAL } from './balance';
 import { raiseTerms, runwayWeeks, serveCapacity, licenseDemand } from './finance';
+import { leadValue } from './enterprise';
 import { jailbreakChance } from './jailbreak';
-import { bandWidth, flagship, predictCapability } from './model';
+import { bandWidth, committedChips, flagship, predictCapability } from './model';
 import { demandChips, planRun, researchWishlist } from './rivalAI';
 import { RESEARCH_BY_ID, researchBlocked } from './research';
 import { TREATIES, treatyBlocked } from './diplomacy';
@@ -55,6 +56,23 @@ export function suggestActions(state: GameState): Hint[] {
       tab: 'finance',
       urgent: runway < 12,
     });
+  }
+
+  // ---- 1b. a good enterprise lead is on the table
+  {
+    const free = lab.chips - committedChips(lab);
+    const good = lab.leads
+      .filter((l) => lab.cash > l.cashCost * 2 && free >= l.chips && leadValue(l) > l.cashCost)
+      .sort((a, b) => leadValue(b) - leadValue(a))[0];
+    if (good) {
+      out.push({
+        id: `lead-${good.id}`,
+        title: `Pursue the ${good.name} enterprise lead`,
+        body: `$${good.weeklyPay.toFixed(1)}M/wk for ${good.durationWeeks} weeks at ${(good.odds * 100).toFixed(0)}% odds — worth the $${good.cashCost}M pitch. Enterprise deals are how you buy runway early. It walks at W${good.expiresWeek}.`,
+        tab: 'finance',
+        urgent: false,
+      });
+    }
   }
 
   // ---- 2. flagship housekeeping
@@ -174,7 +192,7 @@ export function suggestActions(state: GameState): Hint[] {
 
   // ---- 10. diplomacy: a treaty is on the table
   for (const t of TREATIES) {
-    if (!state.diplomacy.completed.includes(t.id) && treatyBlocked(state, t.id) === null) {
+    if (!state.diplomacy.completed.includes(t.id) && treatyBlocked(state, lab, t.id) === null) {
       out.push({
         id: `treaty-${t.id}`,
         title: `${t.name} is signable`,

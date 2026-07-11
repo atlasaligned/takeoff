@@ -22,6 +22,8 @@ import { RivalsTab } from './tabs/Rivals';
 import { WorldTab } from './tabs/World';
 import { FeedTab } from './tabs/Feed';
 import { EventModal, NoticeModal } from './EventModal';
+import { SavesModal } from './SavesModal';
+import { listSaves } from './saves';
 import { TutorialDock } from './TutorialDock';
 
 export default function App() {
@@ -42,7 +44,9 @@ function StartScreen() {
   const [lab, setLab] = useState<LabId>('helios');
   const [seed, setSeed] = useState(() => Math.floor(Math.random() * 1_000_000));
   const [hints, setHints] = useState(true);
+  const [loadOpen, setLoadOpen] = useState(false);
   const canContinue = useMemo(() => hasSave(), []);
+  const hasNamedSaves = useMemo(() => listSaves().length > 0, [loadOpen]);
   return (
     <div className="startscreen">
       <h1>
@@ -114,11 +118,17 @@ function StartScreen() {
               Continue saved game
             </button>
           )}
+          {hasNamedSaves && (
+            <button className="btn" onClick={() => setLoadOpen(true)}>
+              Load game
+            </button>
+          )}
           <button className="btn primary" onClick={() => game.start(lab, seed, hints)}>
             New game
           </button>
         </div>
       </div>
+      {loadOpen && <SavesModal mode="load" onClose={() => setLoadOpen(false)} />}
     </div>
   );
 }
@@ -128,6 +138,7 @@ function StartScreen() {
 export function GameScreen() {
   const game = useGame();
   const st = useSt();
+  const [savesOpen, setSavesOpen] = useState(false);
   const player = st.labs[st.playerLab];
   const m = flagship(player);
 
@@ -326,14 +337,21 @@ export function GameScreen() {
       </main>
 
       <div className="menubtn">
-        <button className="btn sm" onClick={() => game.save()}>
-          Save
+        <button
+          className="btn sm"
+          onClick={() => {
+            game.setSpeed(0);
+            setSavesOpen(true);
+          }}
+        >
+          Save / Load
         </button>
         <button className="btn sm" onClick={() => game.quitToMenu()}>
           Menu
         </button>
       </div>
 
+      {savesOpen && <SavesModal mode="save" onClose={() => setSavesOpen(false)} />}
       {pending && !st.gameOver && <EventModal />}
       {!pending && !st.gameOver && <NoticeModal />}
       {st.tutorial && !st.gameOver && <TutorialDock />}

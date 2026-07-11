@@ -34,8 +34,8 @@ export function DiplomacyTab() {
   const game = useGame();
   const st = useSt();
   const player = st.labs[st.playerLab];
-  const keeper = treatyGatekeeper(st);
-  const agreeP = agreementProbability(st);
+  const keeper = treatyGatekeeper(st, player);
+  const agreeP = agreementProbability(st, player);
   const playerCap = flagship(player)?.capability ?? 0;
   const keeperCap = keeper ? (flagship(keeper)?.capability ?? 0) : 0;
   const gap = keeperCap - playerCap;
@@ -236,7 +236,7 @@ export function DiplomacyTab() {
 
 function treatyStatus(state: GameState, node: TreatyNode): 'done' | 'available' | 'locked' {
   if (state.diplomacy.completed.includes(node.id)) return 'done';
-  return treatyBlocked(state, node.id) === null ? 'available' : 'locked';
+  return treatyBlocked(state, state.labs[state.playerLab], node.id) === null ? 'available' : 'locked';
 }
 
 function TreatyTile({
@@ -255,7 +255,7 @@ function TreatyTile({
   setEl: (id: string, el: HTMLElement | null) => void;
 }) {
   const s = treatyStatus(state, node);
-  const meta = s === 'done' ? 'In force' : s === 'available' ? `${fmtMoney(node.cost)}${node.needsAgreement ? ` · ${(agreeP * 100).toFixed(0)}%` : ''}` : (treatyBlocked(state, node.id) ?? '');
+  const meta = s === 'done' ? 'In force' : s === 'available' ? `${fmtMoney(node.cost)}${node.needsAgreement ? ` · ${(agreeP * 100).toFixed(0)}%` : ''}` : (treatyBlocked(state, state.labs[state.playerLab], node.id) ?? '');
   const cls = `rnode ${s}${selected ? ' sel' : ''}${node.id === 'global-pause' ? ' win' : ''}`;
   return (
     <button ref={(el) => setEl(node.id, el)} className={cls} onClick={onSelect} title={`“${node.quote}”`}>
@@ -272,7 +272,7 @@ function TreatyTile({
 function TreatyDetail({ node, state, agreeP, onClose }: { node: TreatyNode; state: GameState; agreeP: number; onClose: () => void }) {
   const game = useGame();
   const s = treatyStatus(state, node);
-  const blocked = s === 'done' ? null : treatyBlocked(state, node.id);
+  const blocked = s === 'done' ? null : treatyBlocked(state, state.labs[state.playerLab], node.id);
   const prereqs = node.prereqs.map((p) => TREATY_BY_ID[p]);
   return (
     <aside className="rdetail dinline">
@@ -330,7 +330,7 @@ function TreatyDetail({ node, state, agreeP, onClose }: { node: TreatyNode; stat
         {s === 'done' ? (
           <div className="rd-status done">✓ In force</div>
         ) : (
-          <button className="btn primary" disabled={!!blocked} onClick={() => game.act((g) => signTreaty(g, node.id))}>
+          <button className="btn primary" disabled={!!blocked} onClick={() => game.act((g) => signTreaty(g, g.labs[g.playerLab], node.id))}>
             {blocked ?? (node.needsAgreement ? `Negotiate — ${fmtMoney(node.cost)}` : `Sign — ${fmtMoney(node.cost)}`)}
           </button>
         )}
@@ -353,8 +353,8 @@ function SmallActions() {
           <th></th>
         </tr>
         {SMALL_ACTIONS.map((a) => {
-          const ready = smallActionReady(st, a.id);
-          const cdLeft = Math.max(0, (st.diplomacy.cooldowns[a.id] ?? 0) - st.week);
+          const ready = smallActionReady(st, player, a.id);
+          const cdLeft = Math.max(0, (st.diplomacy.cooldowns[`${player.id}:${a.id}`] ?? 0) - st.week);
           const target: GovId | null = a.needsTarget ? (a.id === 'backchannel' ? (player.country === 'us' ? 'prc' : 'us') : player.country) : null;
           return (
             <tr key={a.id}>
@@ -363,7 +363,7 @@ function SmallActions() {
               <td className="num">{a.cost > 0 ? fmtMoney(a.cost) : '−rev'}</td>
               <td>
                 {ready ? (
-                  <button className="btn sm" disabled={player.cash < a.cost} onClick={() => game.act((s) => smallDiplomacy(s, a.id, target))}>
+                  <button className="btn sm" disabled={player.cash < a.cost} onClick={() => game.act((s) => smallDiplomacy(s, s.labs[s.playerLab], a.id, target))}>
                     Use{a.needsTarget ? ` (${target?.toUpperCase()})` : ''}
                   </button>
                 ) : (

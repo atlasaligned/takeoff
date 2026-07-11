@@ -9,7 +9,7 @@ import { newGame } from '../engine/init';
 import { flagship } from '../engine/model';
 import { weekToDate } from '../engine/balance';
 import type { GameState } from '../engine/types';
-import { playGame, STRATEGIES } from './strategies';
+import { PACING_NAMES, playGame, STRATEGIES } from './strategies';
 
 const MAX_WEEKS = 560;
 
@@ -118,7 +118,7 @@ const only = args[0] && STRATEGIES.some((s) => s.name === args[0]) ? args[0] : n
 const seeds = Number(args[only ? 1 : 0]) || 40;
 
 for (const strategy of STRATEGIES) {
-  if (only && strategy.name !== only) continue;
+  if (only ? strategy.name !== only : !PACING_NAMES.includes(strategy.name)) continue;
   const stats: GameStats[] = [];
   for (let seed = 1; seed <= seeds; seed++) stats.push(runOne(strategy.name, seed));
   summarize(strategy.name, stats);

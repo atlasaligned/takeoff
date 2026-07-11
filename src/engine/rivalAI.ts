@@ -3,15 +3,32 @@ import { licenseDemand, maxChipOrder, runwayWeeks, seatsPerChip } from './financ
 import { committedChips, flagship, flopForCapability, postTrainCost, predictCapability, trainCost } from './model';
 import { makeExec } from './people';
 import { labMods, RESEARCH, researchBlocked } from './research';
-import { fundraise, orderChips, promoteModel, setAlignmentCompute, startPostTraining, startResearch, startTrainingRun } from './actions';
+import { fundraise, orderChips, promoteModel, pursueLead, setAlignmentCompute, startPostTraining, startResearch, startTrainingRun } from './actions';
+import { leadValue } from './enterprise';
 import { chance } from './rng';
 import type { CSuiteRole, GameState, Lab } from './types';
+
+export interface RivalActOpts {
+  /**
+   * research ids the pass must never start on its own — a lab following a
+   * named strategy sequences those deliberately (e.g. RSI only after
+   * alignment is high) and the housekeeping AI must not jump the gun
+   */
+  reserved?: readonly string[];
+  /** the strategy runs its own training program; skip run planning here */
+  noRuns?: boolean;
+  /**
+   * the strategy manages its own fundraising cadence; keep only the
+   * cash-negative emergency backstop (large rounds cost board seats)
+   */
+  noRaises?: boolean;
+}
 
 /**
  * Weekly decision pass for an AI-controlled lab. Uses the exact same action
  * functions as the player so the simulation is symmetric.
  */
-export function rivalAct(state: GameState, lab: Lab): void {
+export function rivalAct(state: GameState, lab: Lab, opts: RivalActOpts = {}): void {
   if (!lab.alive) return;
   const profile = lab.profile;
   const m = flagship(lab);
@@ -27,20 +44,29 @@ export function rivalAct(state: GameState, lab: Lab): void {
   const runway = runwayWeeks(lab);
   if (lab.cash < 0) {
     fundraise(state, lab, 'emergency');
-  } else if (runway < BAL.AI_RUNWAY_RAISE_AT && state.week >= lab.fundraiseCooldownUntil) {
+  } else if (!opts.noRaises && runway < BAL.AI_RUNWAY_RAISE_AT && state.week >= lab.fundraiseCooldownUntil) {
     // prefer small rounds; go large only with a comfortable seat cushion
     fundraise(state, lab, lab.boardYours >= 6 && chance(state.rng, 0.4) ? 'large' : 'small');
-  } else if (!lab.run && state.week >= lab.fundraiseCooldownUntil) {
+  } else if (!opts.noRaises && !lab.run && state.week >= lab.fundraiseCooldownUntil) {
     // raise to fund the next frontier run — but only if the run is actually reachable
     const plan = planRun(state, lab);
     if (lab.cash < plan.cost * 1.4 && plan.cost < lab.valuation * 0.25) fundraise(state, lab, 'small');
+  }
+
+  // 1b. enterprise leads: take positive-EV deals when cash and chips allow
+  for (const lead of [...lab.leads]) {
+    const free = lab.chips - committedChips(lab);
+    if (lab.cash < lead.cashCost * (3 - profile.commerce)) continue; // keep a cash buffer
+    if (lead.chips > free * 0.3) continue; // don't strangle inference/training compute
+    if (leadValue(lead) < lead.cashCost) continue; // demand a decent expected return
+    pursueLead(state, lab, lead.id);
   }
 
   // 2. allocation
   allocate(state, lab);
 
   // 3. training runs
-  if (!lab.run) maybeStartRun(state, lab);
+  if (!lab.run && !opts.noRuns) maybeStartRun(state, lab);
   // 3b. post-training runs on its own chip commitment, even alongside a run
   if (!lab.postTraining && lab.cash > postTrainCost(lab) * 4) {
     startPostTraining(lab);
@@ -50,6 +76,7 @@ export function rivalAct(state: GameState, lab: Lab): void {
   if (lab.research.active.length < 2) {
     const wish = researchWishlist(state, lab);
     for (const nodeId of wish) {
+      if (opts.reserved?.includes(nodeId)) continue;
       const node = RESEARCH.find((n) => n.id === nodeId);
       if (!node) continue;
       if (lab.cash < node.cost * 1.3) continue; // keep a buffer
@@ -63,7 +90,12 @@ export function rivalAct(state: GameState, lab: Lab): void {
   // 5. chips: grow toward a fleet the business can actually power
   const burn = Math.max(1, lab.weeklyCosts - lab.weeklyRevenue);
   const incoming = lab.chipOrders.reduce((s, o) => s + o.chips, 0);
-  const targetFleet = Math.max(8_000, demandChips(state, lab) * (1.3 + profile.aggression * 0.7), Math.floor(lab.chips * (1 + profile.aggression * 0.12)));
+  // demand-driven growth, softly capped where grid strain starts eating opex —
+  // a reckless lab tolerates more strain than a careful one
+  const targetFleet = Math.min(
+    BAL.CHIP_OPEX_SOFT_FLEET * (0.7 + profile.aggression * 0.8),
+    Math.max(8_000, demandChips(state, lab) * (1.3 + profile.aggression * 0.7), Math.floor(lab.chips * (1 + profile.aggression * 0.12))),
+  );
   if (lab.chips + incoming < targetFleet && lab.cash > Math.max(1500, burn * 45) && chance(state.rng, 0.25)) {
     const budget = lab.cash * (0.12 + profile.aggression * 0.12);
     const price = state.world.chipPrice * (lab.country === 'prc' ? BAL.PRC_CHIP_PRICE_MULT : 1);
@@ -115,7 +147,13 @@ export function planRun(state: GameState, lab: Lab): { flop: number; cost: numbe
   const rawNeeded = flopForCapability(targetCap / mods.capRunBonusMult) / (mods.effFlopMult * state.world.algoProgress);
   const flopPerWeek = trainChips * lab.chipEfficiency * BAL.FLOP_PER_CHIP_WEEK * mods.trainSpeedMult;
   const maxDuration = 30 + profile.aggression * 22;
-  const flop = Math.min(rawNeeded, flopPerWeek * maxDuration);
+  let flop = Math.min(rawNeeded, flopPerWeek * maxDuration);
+  // the mid-game training wall: once the log FLOP curve outruns what a normal-
+  // length run can deliver, a competent lab signs up for the LONG run instead
+  // of stalling below the frontier until the fleet catches up
+  if (predictCapability(lab, flop, state.world.algoProgress) < myCap + 1.5) {
+    flop = Math.min(rawNeeded, flopPerWeek * BAL.AI_RUN_WALL_WEEKS);
+  }
   return { flop, cost: trainCost(lab, flop), chips: trainChips };
 }
 

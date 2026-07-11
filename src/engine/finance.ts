@@ -45,6 +45,7 @@ export function licenseRevenueForSeats(lab: Lab, seats: number): number {
 export interface WeeklyPnl {
   licenseRevenue: number;
   contractRevenue: number;
+  enterpriseRevenue: number;
   payroll: number;
   computeOpex: number;
   lawsuits: number;
@@ -61,26 +62,33 @@ export function weeklyPnl(_state: GameState, lab: Lab, demand: Record<string, nu
   const served = Math.min(demand[lab.id] ?? 0, serveCapacity(lab));
   const licenseRevenue = licenseRevenueForSeats(lab, served);
   const contractRevenue = lab.contracts.reduce((s, c) => s + c.weeklyPay, 0);
+  const enterpriseRevenue = lab.enterprise.reduce((s, c) => s + c.weeklyPay, 0);
 
   const namedPay = Object.values(lab.csuite).reduce((s, e) => s + (e?.salary ?? 0), 0) + lab.stars.reduce((s, r) => s + r.salary, 0);
   const basePayroll = BAL.BASE_PAYROLL * (lab.country === 'prc' ? BAL.PRC_PAYROLL_MULT : 1);
   const payroll = (basePayroll + (lab.chips / 10000) * BAL.PAYROLL_PER_10K_CHIPS + namedPay) * mods.burnMult;
 
-  const computeOpex = lab.chips * BAL.CHIP_OPEX * mods.burnMult * mods.chipUpkeepMult;
+  // power and datacenter scarcity: opex per chip climbs once the fleet outgrows
+  // the grid (soft cap) — unbounded fleet-maxxing must stop paying for itself
+  const gridStrain = 1 + Math.max(0, (lab.chips - BAL.CHIP_OPEX_SOFT_FLEET) / BAL.CHIP_OPEX_SOFT_FLEET) * BAL.CHIP_OPEX_STRAIN;
+  const computeOpex = lab.chips * BAL.CHIP_OPEX * gridStrain * mods.burnMult * mods.chipUpkeepMult;
 
   const lawsuits = lab.lawsuits.reduce((s, l) => s + l.weeklyCost, 0);
 
-  const revenue = licenseRevenue + contractRevenue;
+  const revenue = licenseRevenue + contractRevenue + enterpriseRevenue;
   const oversight = revenue * lab.oversightCut;
   const costs = payroll + computeOpex + lawsuits + oversight;
-  return { licenseRevenue, contractRevenue, payroll, computeOpex, lawsuits, oversight, revenue, costs, net: revenue - costs, licensesServed: served };
+  return { licenseRevenue, contractRevenue, enterpriseRevenue, payroll, computeOpex, lawsuits, oversight, revenue, costs, net: revenue - costs, licensesServed: served };
 }
 
 /** "Fair" valuation the market drifts toward. */
 export function fairValuation(lab: Lab): number {
   const m = flagship(lab);
   const cap = m ? m.capability : 0;
-  const annual = Math.max(0, lab.weeklyRevenue) * 52;
+  // fixed-term enterprise contracts don't earn the hype multiple — investors
+  // count only a sliver of that revenue as if it were recurring
+  const entWeekly = lab.enterprise.reduce((s, c) => s + c.weeklyPay, 0);
+  const annual = Math.max(0, lab.weeklyRevenue - entWeekly * (1 - BAL.ENT_VALUATION_FRAC)) * 52;
   // hype multiple compresses toward the floor as revenue reaches real-company scale
   const multiple = BAL.REV_MULTIPLE_FLOOR + (BAL.REV_MULTIPLE - BAL.REV_MULTIPLE_FLOOR) * Math.exp(-annual / BAL.REV_MULTIPLE_COMPRESS);
   const capPart = BAL.CAP_PREMIUM * Math.exp(cap / BAL.CAP_PREMIUM_SCALE);

@@ -103,10 +103,10 @@ export const BAL = {
   /** piecewise-linear P(win) over true alignment at capability 100 */
   WIN_ROLL_POINTS: [
     [84, 0.0],
-    [88, 0.05],
-    [92, 0.2],
-    [95, 0.45],
-    [98, 0.7],
+    [88, 0.08],
+    [92, 0.28],
+    [95, 0.52],
+    [98, 0.72],
     [100, 0.88],
   ] as ReadonlyArray<readonly [number, number]>,
   ASI_CAPABILITY: 100,
@@ -144,6 +144,13 @@ export const BAL = {
   PRC_CHIP_DELIVERY_EXTRA: 6,
   /** weekly opex per chip, $M — every chip is always working (no idle) */
   CHIP_OPEX: 0.0016,
+  /**
+   * grid strain: fleets beyond this size pay progressively more opex per chip
+   * (power contracts, land, cooling). Kills the "buy 30% of cash in chips
+   * every week forever" runaway found by the tournament cheese sweep.
+   */
+  CHIP_OPEX_SOFT_FLEET: 600_000,
+  CHIP_OPEX_STRAIN: 0.6,
   /** obsolescence: fleet efficiency multiplier decays to this floor */
   CHIP_EFF_DECAY_PER_WEEK: 0.0012,
   CHIP_EFF_FLOOR: 0.55,
@@ -169,6 +176,52 @@ export const BAL = {
   DEFAULT_LICENSE_PRICE: 25,
   /** PRC labs address a mostly-domestic market: demand weight multiplier */
   PRC_DEMAND_MULT: 0.12,
+
+  // ---------------------------------------------------------------- enterprise sales
+  /**
+   * Enterprise leads: an actively-chased third revenue stream for the early
+   * game. Sizes are FLAT in $M — as license revenue grows quadratically with
+   * adoption, enterprise fades into background noise without extra rules.
+   */
+  ENT_LEAD_CHANCE: 0.5, // weekly chance a lead lands (≈1 per 1-2 weeks)
+  ENT_MAX_LEADS: 3, // open leads per lab; new ones stop arriving until slots free
+  /**
+   * sales-team bandwidth: no new leads while this many contracts are running.
+   * This is what keeps enterprise an early-game survival tool instead of a
+   * scaling money engine — without it the exploit sweep's money-cheese lines
+   * (tycoon/saint) farm contracts into mega-fleet valuations.
+   */
+  ENT_MAX_ACTIVE: 4,
+  ENT_LEAD_EXPIRY: 4, // weeks before an unanswered lead walks
+  ENT_FT_FRAC: 0.3, // fraction of leads that require a fine-tuned model
+  /** standard lead ranges (fine-tune leads multiply these) */
+  ENT_CASH_MIN: 30,
+  ENT_CASH_MAX: 80, // $M upfront, paid win or lose
+  ENT_CHIPS_MIN: 200,
+  ENT_CHIPS_MAX: 800, // chips locked for the duration on success
+  ENT_PAY_MIN: 2.5,
+  ENT_PAY_MAX: 6, // $M/wk
+  ENT_WEEKS_MIN: 28,
+  ENT_WEEKS_MAX: 52,
+  ENT_ODDS_MIN: 0.35,
+  ENT_ODDS_MAX: 0.75,
+  /** conversion odds bonus per flagship capability point above the US start (~10) */
+  ENT_ODDS_PER_CAP: 0.004,
+  ENT_ODDS_CAP: 0.92,
+  /** fine-tune multipliers: pricier, longer, bigger */
+  ENT_FT_CASH_MULT: 2.4,
+  ENT_FT_CHIPS_MULT: 2.0,
+  ENT_FT_PAY_MULT: 2.2,
+  ENT_FT_WEEKS_MULT: 1.7,
+  /** PRC labs sell into a mostly-domestic enterprise market: pay & cost scale */
+  ENT_PRC_MULT: 0.35,
+  /**
+   * investors value fixed-term contract revenue near its remaining cash value,
+   * not at the startup hype multiple: only this fraction of enterprise $/wk
+   * counts toward fair valuation. Kills the enterprise→valuation→mega-raise
+   * loop while keeping the cash-flow benefit that is the point of the system.
+   */
+  ENT_VALUATION_FRAC: 0.25,
 
   // ---------------------------------------------------------------- valuation
   /**
@@ -386,6 +439,13 @@ export const BAL = {
   /** fraction of uncommitted chips an AI commits to a run: BASE + aggression * AGGR */
   AI_TRAIN_COMMIT_BASE: 0.45,
   AI_TRAIN_COMMIT_AGGR: 0.2,
+  /** longest run an AI signs up for to break the mid-game training wall */
+  AI_RUN_WALL_WEEKS: 85,
+  /**
+   * Compute Cap Treaty refusal: rivals walk out if the proposer's fleet
+   * exceeds the biggest rival fleet by this factor (anti cap-freeze cheese).
+   */
+  TREATY_CAP_FLEET_LEAD: 1.1,
 } as const;
 
 /** Date helpers: week 1 = Mon Jan 6 2025 (the game starts in week 1). */
