@@ -19,6 +19,7 @@ import { committedChips, flagship, flopForCapability, postTrainCost, predictCapa
 import { poachCost } from './people';
 import { hasR, labMods, RESEARCH_BY_ID, researchBlocked, researchCost } from './research';
 import { rivalAct } from './rivalAI';
+import { optimalAct } from './arbiter';
 import type { GameState, Lab, RivalProfile } from './types';
 
 /**
@@ -36,6 +37,8 @@ export interface Strategy {
   name: string;
   desc: string;
   cheese: boolean;
+  /** the adaptive arbiter ('optimal') — not a fixed playbook; excluded from REASONABLE/CHEESES */
+  meta?: boolean;
   profile: RivalProfile;
   /** run the shared rivalAct housekeeping pass each week (default behavior) */
   baseAI: boolean;
@@ -262,9 +265,13 @@ function racerCore(s: GameState, lab: Lab, rsiAt: number, chipFrac = 0.65, cashF
   // models near the wall are saint candidates that carry their one-shots into
   // the hold — start the expensive finishers as soon as they can stick
   if (cap > 80) rush(s, lab, ALIGN_FINISHERS, 3, 3000);
-  // a runaway reckless leader is everyone's clock: strip its star researchers
-  // to slow its runs while your alignment program catches up
-  if (frontierCap(s, lab) > cap + 5) poachLeader(s, lab, 10_000);
+  // A runaway leader is everyone's clock, but poaching is a costly, trust-
+  // burning, low-odds move now — never a reliable stall. Only reach for it
+  // when comfortably funded AND meaningfully behind, and only occasionally
+  // (the trust hit compounds), so it stays a situational tool, not a loop.
+  if (frontierCap(s, lab) > cap + 12 && lab.cash > 40_000 && s.week % 8 === 0) {
+    poachLeader(s, lab, 25_000);
+  }
   const m = flagship(lab);
   // the treaty one-shots (Joint Safety Institute +4) land on the flagship and
   // stick above the work ceiling — sign them once the grind has done its part
@@ -737,18 +744,42 @@ export const STRATEGIES: Strategy[] = [
       megaRun(s, lab, (flagship(lab)?.capability ?? 0) + 8, 0.6);
     },
   },
+
+  // ============================================================ OPTIMAL (adaptive)
+  {
+    // The strategy-switching bot: no fixed line. Each cycle it rolls the game
+    // forward under every reasonable playbook and adopts the winner. Driven by
+    // arbiter.ts; not a fixed playbook, so it anchors neither REASONABLE nor
+    // CHEESES. Its profile/events are only the fallback housekeeping defaults.
+    name: 'optimal',
+    desc: 'adaptive: roll out every reasonable playbook, switch to whichever wins',
+    cheese: false,
+    meta: true,
+    profile: { aggression: 0.6, safety: 0.65, commerce: 0.6 },
+    baseAI: true,
+    events: SAFE_EVENTS,
+  },
 ];
 
 export const STRATEGY_BY_NAME: Record<string, Strategy> = Object.fromEntries(STRATEGIES.map((s) => [s.name, s]));
 
-/** The reasonable, tournament-anchoring strategies. */
-export const REASONABLE = STRATEGIES.filter((s) => !s.cheese).map((s) => s.name);
+/** The reasonable, fixed playbooks that anchor the fairness checks. */
+export const REASONABLE = STRATEGIES.filter((s) => !s.cheese && !s.meta).map((s) => s.name);
 export const CHEESES = STRATEGIES.filter((s) => s.cheese).map((s) => s.name);
+/** The adaptive arbiter bot. */
+export const OPTIMAL = 'optimal';
+
+/** Run a concrete playbook on a lab: base housekeeping pass + its extra logic. */
+export function runStrategy(state: GameState, lab: Lab, strat: Strategy): void {
+  if (strat.baseAI) rivalAct(state, lab, { reserved: strat.reserved, noRuns: strat.ownRuns, noRaises: strat.ownRuns });
+  strat.extra?.(state, lab);
+}
 
 /**
  * Weekly decision pass for an AI-controlled lab: the shared rivalAct
- * housekeeping plus the lab's named strategy playbook. Labs without a
- * strategy fall back to plain rivalAct (the pre-strategy behavior).
+ * housekeeping plus the lab's named strategy playbook. The adaptive 'optimal'
+ * bot hands off to the arbiter; labs without a strategy fall back to plain
+ * rivalAct (the pre-strategy behavior).
  */
 export function strategyAct(state: GameState, lab: Lab): void {
   if (!lab.alive) return;
@@ -757,6 +788,9 @@ export function strategyAct(state: GameState, lab: Lab): void {
     rivalAct(state, lab);
     return;
   }
-  if (strat.baseAI) rivalAct(state, lab, { reserved: strat.reserved, noRuns: strat.ownRuns, noRaises: strat.ownRuns });
-  strat.extra?.(state, lab);
+  if (strat.meta) {
+    optimalAct(state, lab);
+    return;
+  }
+  runStrategy(state, lab, strat);
 }

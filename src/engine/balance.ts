@@ -204,16 +204,16 @@ export const BAL = {
   ENT_LEAD_EXPIRY: 4, // weeks before an unanswered lead walks
   ENT_FT_FRAC: 0.3, // fraction of leads that require a fine-tuned model
   /** standard lead ranges (fine-tune leads multiply these) */
-  ENT_CASH_MIN: 30,
-  ENT_CASH_MAX: 80, // $M upfront, paid win or lose
+  ENT_CASH_MIN: 18,
+  ENT_CASH_MAX: 45, // $M upfront, paid win or lose
   ENT_CHIPS_MIN: 200,
   ENT_CHIPS_MAX: 800, // chips locked for the duration on success
   ENT_PAY_MIN: 2.5,
   ENT_PAY_MAX: 6, // $M/wk
   ENT_WEEKS_MIN: 28,
   ENT_WEEKS_MAX: 52,
-  ENT_ODDS_MIN: 0.35,
-  ENT_ODDS_MAX: 0.75,
+  ENT_ODDS_MIN: 0.5,
+  ENT_ODDS_MAX: 0.85,
   /** conversion odds bonus per flagship capability point above the US start (~10) */
   ENT_ODDS_PER_CAP: 0.004,
   ENT_ODDS_CAP: 0.92,
@@ -365,12 +365,12 @@ export const BAL = {
    * trustLoss and freezes the ladder for GOV_RETRY_COOLDOWN.
    */
   GOV_LADDER: [
-    /* eval grant   */ { trust: 0, week: 2, chipFrac: 0, minChips: 0, maxChips: 0, payMult: 0, upfrontWeeks: 0, cash: 150, trustGain: 3, trustLoss: 2 },
-    /* pilot        */ { trust: 40, week: 8, chipFrac: 0.02, minChips: 500, maxChips: 1500, payMult: 5, upfrontWeeks: 10, cash: 0, trustGain: 3, trustLoss: 3 },
-    /* civilian     */ { trust: 50, week: 20, chipFrac: 0.04, minChips: 1000, maxChips: 6000, payMult: 6, upfrontWeeks: 12, cash: 0, trustGain: 4, trustLoss: 3 },
-    /* classified   */ { trust: 58, week: 32, chipFrac: 0.06, minChips: 2000, maxChips: 10_000, payMult: 8, upfrontWeeks: 14, cash: 0, trustGain: 5, trustLoss: 4 },
-    /* supplier     */ { trust: 68, week: 48, chipFrac: 0.09, minChips: 5000, maxChips: 30_000, payMult: 10, upfrontWeeks: 18, cash: 0, trustGain: 6, trustLoss: 4 },
-    /* sovereign    */ { trust: 74, week: 60, chipFrac: 0.15, minChips: 8000, maxChips: 50_000, payMult: 4, upfrontWeeks: 0, cash: 15_000, trustGain: 6, trustLoss: 6 },
+    /* eval grant   */ { trust: 0, week: 2, chipFrac: 0, minChips: 0, maxChips: 0, payMult: 0, upfrontWeeks: 0, cash: 300, trustGain: 3, trustLoss: 2 },
+    /* pilot        */ { trust: 40, week: 8, chipFrac: 0.02, minChips: 500, maxChips: 1500, payMult: 8, upfrontWeeks: 10, cash: 120, trustGain: 3, trustLoss: 3 },
+    /* civilian     */ { trust: 50, week: 20, chipFrac: 0.04, minChips: 1000, maxChips: 6000, payMult: 9, upfrontWeeks: 12, cash: 0, trustGain: 4, trustLoss: 3 },
+    /* classified   */ { trust: 58, week: 32, chipFrac: 0.06, minChips: 2000, maxChips: 10_000, payMult: 11, upfrontWeeks: 14, cash: 0, trustGain: 5, trustLoss: 4 },
+    /* supplier     */ { trust: 68, week: 48, chipFrac: 0.09, minChips: 5000, maxChips: 30_000, payMult: 13, upfrontWeeks: 18, cash: 0, trustGain: 6, trustLoss: 4 },
+    /* sovereign    */ { trust: 74, week: 60, chipFrac: 0.15, minChips: 8000, maxChips: 50_000, payMult: 5, upfrontWeeks: 0, cash: 15_000, trustGain: 6, trustLoss: 6 },
   ] as ReadonlyArray<{ trust: number; week: number; chipFrac: number; minChips: number; maxChips: number; payMult: number; upfrontWeeks: number; cash: number; trustGain: number; trustLoss: number }>,
   /** research-gated bonus offers (fire out of ladder order, once each) */
   GOV_MEGADEAL: { trust: 62, chipFrac: 0.08, minChips: 4000, maxChips: 20_000, payMult: 9, upfrontWeeks: 16, trustGain: 5, trustLoss: 4 },
@@ -406,11 +406,13 @@ export const BAL = {
   HOSTILE_EXEC_DISCONTENT: 0.9,
 
   // ---------------------------------------------------------------- people
-  POACH_BASE_ODDS: 0.3,
+  POACH_BASE_ODDS: 0.16,
   POACH_CHARISMA_WEIGHT: 0.004, // + per charisma point above 50
   POACH_COST_MULT: 3, // signing bonus = salary * 52 weeks * this / 52 → ~3 months... see people.ts
   /** signing-bonus premium per tier² — makes stripping top researchers costly */
-  POACH_TIER_COST: 700,
+  POACH_TIER_COST: 2400,
+  /** public-trust hit per poach attempt — serial talent-raiding reads as hostile */
+  POACH_TRUST_HIT: 4,
   NEW_STAR_MARKET_MEAN_WEEKS: 14,
 
   // ---------------------------------------------------------------- diplomacy

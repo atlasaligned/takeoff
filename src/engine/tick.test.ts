@@ -31,7 +31,7 @@ function assertNoNaN(obj: unknown, path = 'state'): void {
 describe('advanceWeek', () => {
   it('pauses while a blocking event is pending', () => {
     const state = newGame('helios', 1);
-    state.pendingEvents.push({ eventId: 'x', week: 0, title: 't', body: 'b', choices: [{ id: 'a', label: 'A', detail: '' }], data: {} });
+    state.pendingEvents.push({ eventId: 'x', labId: 'helios', week: 0, title: 't', body: 'b', choices: [{ id: 'a', label: 'A', detail: '' }], data: {} });
     expect(isPaused(state)).toBe(true);
     const week = state.week;
     advanceWeek(state);

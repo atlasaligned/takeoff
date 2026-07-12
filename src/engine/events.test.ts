@@ -13,11 +13,12 @@ describe('event definitions', () => {
 
   it('weights and bodies evaluate without crashing at game start', () => {
     const state = newGame('helios', 1);
+    const lab = state.labs.helios;
     for (const e of ALL_EVENTS) {
-      expect(() => e.weight(state)).not.toThrow();
-      const data = e.setup ? e.setup(state) : {};
-      expect(typeof e.body(state, data)).toBe('string');
-      for (const c of e.choices) expect(typeof c.detail(state, data)).toBe('string');
+      expect(() => e.weight(state, lab)).not.toThrow();
+      const data = e.setup ? e.setup(state, lab) : {};
+      expect(typeof e.body(state, lab, data)).toBe('string');
+      for (const c of e.choices) expect(typeof c.detail(state, lab, data)).toBe('string');
     }
   });
 });
@@ -30,8 +31,8 @@ describe('event pacing', () => {
     for (let seed = 0; seed < trials; seed++) {
       const state = newGame('helios', seed);
       state.week = 100;
-      state.weeksSinceEvent = 2; // typical steady state
-      if (rollEvent(state)) fired++;
+      state.labs.helios.weeksSinceEvent = 2; // typical steady state
+      if (rollEvent(state, state.labs.helios)) fired++;
     }
     const perWeek = fired / trials;
     expect(perWeek).toBeGreaterThan(0.15); // ≥ ~0.7/month
@@ -41,10 +42,10 @@ describe('event pacing', () => {
   it('respects per-event cooldowns and once-flags', () => {
     const state = newGame('helios', 1);
     state.week = 50;
-    state.eventCooldowns['eu-usb-c'] = 49;
+    state.labs.helios.eventCooldowns['eu-usb-c'] = 49;
     // roll many times; usb-c must never fire again (once: true)
     for (let i = 0; i < 500; i++) {
-      const ev = rollEvent(state);
+      const ev = rollEvent(state, state.labs.helios);
       if (ev) expect(ev.eventId).not.toBe('eu-usb-c');
     }
   });
@@ -56,12 +57,12 @@ describe('event pacing', () => {
     for (let seed = 0; seed < trials; seed++) {
       const dry = newGame('helios', seed);
       dry.week = 60;
-      dry.weeksSinceEvent = 10;
-      if (rollEvent(dry)) firedDry++;
+      dry.labs.helios.weeksSinceEvent = 10;
+      if (rollEvent(dry, dry.labs.helios)) firedDry++;
       const wet = newGame('helios', seed + 100_000);
       wet.week = 60;
-      wet.weeksSinceEvent = 0;
-      if (rollEvent(wet)) firedWet++;
+      wet.labs.helios.weeksSinceEvent = 0;
+      if (rollEvent(wet, wet.labs.helios)) firedWet++;
     }
     expect(firedDry).toBeGreaterThan(firedWet);
   });
@@ -71,47 +72,49 @@ describe('govt ladder', () => {
   it('offers the evaluation grant in week 2', () => {
     const state = newGame('helios', 3);
     state.week = 2;
-    const ev = rollGovLadder(state);
+    const ev = rollGovLadder(state, state.labs.helios);
     expect(ev?.eventId).toBe('gov-eval-grant');
   });
 
   it('accepting a rung advances the ladder; rejecting freezes and retries it', () => {
     const state = newGame('helios', 5);
+    const lab = state.labs.helios;
     state.week = 2;
-    const offer = rollGovLadder(state)!;
+    const offer = rollGovLadder(state, lab)!;
     resolveEvent(state, offer, 'reject');
-    expect(state.govLadder.rung).toBe(0);
-    expect(state.govLadder.rejectedUntil).toBe(2 + BAL.GOV_RETRY_COOLDOWN);
+    expect(lab.govLadder.rung).toBe(0);
+    expect(lab.govLadder.rejectedUntil).toBe(2 + BAL.GOV_RETRY_COOLDOWN);
     // frozen: nothing fires during the sulk, even past the spacing gap
     state.week = 2 + BAL.GOV_EVENT_MIN_GAP;
-    expect(rollGovLadder(state)).toBeNull();
+    expect(rollGovLadder(state, lab)).toBeNull();
     // after the cooldown the same rung is offered again
     state.week = 2 + BAL.GOV_RETRY_COOLDOWN;
-    const retry = rollGovLadder(state)!;
+    const retry = rollGovLadder(state, lab)!;
     expect(retry.eventId).toBe('gov-eval-grant');
     resolveEvent(state, retry, 'accept');
-    expect(state.govLadder.rung).toBe(1);
+    expect(lab.govLadder.rung).toBe(1);
   });
 
   it('respects the minimum gap between govt events', () => {
     const state = newGame('helios', 7);
     state.week = 2;
-    expect(rollGovLadder(state)).not.toBeNull();
+    expect(rollGovLadder(state, state.labs.helios)).not.toBeNull();
     state.week = 2 + BAL.GOV_EVENT_MIN_GAP - 1;
-    expect(rollGovLadder(state)).toBeNull();
+    expect(rollGovLadder(state, state.labs.helios)).toBeNull();
   });
 
   it('escalates the crackdown branch while govt trust is low', () => {
     const state = newGame('helios', 9);
-    state.labs.helios.govTrust = 10;
+    const lab = state.labs.helios;
+    lab.govTrust = 10;
     const seen: string[] = [];
     for (let week = 10; week < 400 && seen.length < 5; week++) {
       state.week = week;
-      const ev = rollGovLadder(state);
+      const ev = rollGovLadder(state, lab);
       if (ev) {
         seen.push(ev.eventId);
         resolveEvent(state, ev, ev.choices[ev.choices.length - 1].id); // safe choice
-        state.labs.helios.govTrust = 10; // keep it in the doghouse
+        lab.govTrust = 10; // keep it in the doghouse
       }
     }
     expect(seen).toEqual(['gov-hearing', 'gov-binding-regs', 'gov-oversight', 'gov-requisition', 'gov-nationalization']);
@@ -120,11 +123,12 @@ describe('govt ladder', () => {
 
   it('recovering trust resets the crackdown escalation', () => {
     const state = newGame('helios', 11);
-    state.govLadder.crackdown = 3;
-    state.labs.helios.govTrust = BAL.GOV_CRACKDOWN_RESET + 5;
+    const lab = state.labs.helios;
+    lab.govLadder.crackdown = 3;
+    lab.govTrust = BAL.GOV_CRACKDOWN_RESET + 5;
     state.week = 50;
-    rollGovLadder(state);
-    expect(state.govLadder.crackdown).toBe(0);
+    rollGovLadder(state, lab);
+    expect(lab.govLadder.crackdown).toBe(0);
   });
 });
 
@@ -133,15 +137,17 @@ describe('event resolution', () => {
     for (const e of ALL_EVENTS) {
       for (const c of e.choices) {
         const state = newGame('helios', 7);
-        state.labs.helios.cash = 100_000;
+        const lab = state.labs.helios;
+        lab.cash = 100_000;
         state.week = 60;
-        const data = e.setup ? e.setup(state) : {};
+        const data = e.setup ? e.setup(state, lab) : {};
         const event = {
           eventId: e.id,
+          labId: lab.id,
           week: state.week,
-          title: typeof e.title === 'function' ? e.title(state, data) : e.title,
-          body: e.body(state, data),
-          choices: e.choices.map((ch) => ({ id: ch.id, label: ch.label, detail: ch.detail(state, data) })),
+          title: typeof e.title === 'function' ? e.title(state, lab, data) : e.title,
+          body: e.body(state, lab, data),
+          choices: e.choices.map((ch) => ({ id: ch.id, label: ch.label, detail: ch.detail(state, lab, data) })),
           data,
         };
         expect(() => resolveEvent(state, event, c.id)).not.toThrow();
@@ -151,11 +157,12 @@ describe('event resolution', () => {
 
   it('signing a star actually adds them to the roster', () => {
     const state = newGame('helios', 9);
+    const lab = state.labs.helios;
     const def = EVENTS_BY_ID['star-on-market'];
-    const data = def.setup!(state);
-    const event = { eventId: def.id, week: 0, title: 'x', body: 'x', choices: [], data };
-    const before = state.labs.helios.stars.length;
+    const data = def.setup!(state, lab);
+    const event = { eventId: def.id, labId: lab.id, week: 0, title: 'x', body: 'x', choices: [], data };
+    const before = lab.stars.length;
     resolveEvent(state, event, 'hire');
-    expect(state.labs.helios.stars.length).toBe(before + 1);
+    expect(lab.stars.length).toBe(before + 1);
   });
 });

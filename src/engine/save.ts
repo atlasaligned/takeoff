@@ -2,8 +2,9 @@ import type { GameState } from './types';
 import { flagship } from './model';
 import { weekToDate } from './balance';
 
-// v8: per-lab diplomacy (cooldown keys, brokeredBy), GameOver.byLab, Lab.strategy.
-export const SAVE_VERSION = 8;
+// v9: symmetric events — govLadder/eventCooldowns/weeksSinceEvent moved onto
+// each Lab, ActiveEvent.labId, Lab.metaStrategy (arbiter bookkeeping).
+export const SAVE_VERSION = 9;
 
 /** GameState is plain JSON by construction — serialization is trivial. */
 export function serialize(state: GameState): string {

@@ -84,6 +84,7 @@ describe('UI smoke', () => {
     const s = midGame();
     s.pendingEvents.push({
       eventId: 'eu-usb-c',
+      labId: s.playerLab,
       week: s.week,
       title: 'EU mandates USB-C on datacenters',
       body: 'Compliance is mandatory and confusing.',

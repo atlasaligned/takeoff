@@ -82,6 +82,9 @@ export function poachCost(target: Star): number {
 export function attemptPoach(state: GameState, lab: Lab, fromLab: Lab, target: Star): boolean {
   const p = poachOdds(state, lab, target);
   lab.cash -= poachCost(target);
+  // Talent-raiding a rival reads as hostile whether or not it lands — small
+  // public-trust hit, so serial stripping compounds against you (odds fall too).
+  lab.publicTrust = clamp(lab.publicTrust - BAL.POACH_TRUST_HIT, 0, 100);
   if (chance(state.rng, p)) {
     fromLab.stars = fromLab.stars.filter((s) => s.id !== target.id);
     target.salary = Math.round(target.salary * 1.4 * 10) / 10; // they know their worth now

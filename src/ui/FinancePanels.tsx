@@ -275,7 +275,7 @@ export function FundraisingPanel({ compact = false }: { compact?: boolean }) {
             </div>
           </div>
         )}
-        {player.revenueExpectation && (
+        {!compact && player.revenueExpectation && (
           <div className="meter" style={{ marginTop: 10 }}>
             <div className="row">
               <span className="k">

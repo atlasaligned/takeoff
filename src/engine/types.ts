@@ -225,6 +225,15 @@ export interface Lab {
   profile: RivalProfile;
   /** named strategy driving this lab when AI-controlled (see engine/strategy.ts) */
   strategy?: string;
+  /** arbiter ('optimal') bookkeeping: which playbook it currently follows */
+  metaStrategy?: { current: string; nextEvalWeek: number };
+
+  /** this lab's standing in its home government's procurement ladder */
+  govLadder: GovLadderState;
+  /** per-event-id week of last firing for THIS lab, to space repeatable events */
+  eventCooldowns: Record<string, number>;
+  /** weeks since this lab's last random event (raises the odds gradually) */
+  weeksSinceEvent: number;
 }
 
 export interface Government {
@@ -273,6 +282,8 @@ export interface EventChoice {
 /** A blocking event waiting for a player decision. */
 export interface ActiveEvent {
   eventId: string;
+  /** the lab this event targets (events are symmetric — every lab gets them) */
+  labId: LabId;
   week: number;
   title: string;
   body: string;
@@ -282,8 +293,8 @@ export interface ActiveEvent {
 }
 
 /**
- * The player's standing in the government procurement ladder (home govt only).
- * Rivals get equivalent treatment through research-completion contracts.
+ * A lab's standing in the government procurement ladder (home govt only).
+ * Symmetric: every lab climbs its own ladder; AI labs auto-answer the offers.
  */
 export interface GovLadderState {
   /** next core ladder rung to be offered (index into the ladder) */
@@ -335,24 +346,19 @@ export interface GameState {
   govs: Record<GovId, Government>;
   world: World;
   diplomacy: DiplomacyState;
-  govLadder: GovLadderState;
   feed: FeedItem[];
   /** blocking events for the player; game must pause while non-empty */
   pendingEvents: ActiveEvent[];
   history: HistoryPoint[];
   gameOver: GameOver | null;
-  /** per-event-id week of last firing, to space repeatable events */
-  eventCooldowns: Record<string, number>;
   feedCounter: number;
-  /** weeks since the last random event fired (raises the odds gradually) */
-  weeksSinceEvent: number;
   /** newer-player mode: the advisor suggests a helpful next action */
   hintsEnabled: boolean;
   /** guided tutorial game: random events are suppressed and the game is never saved */
   tutorial?: boolean;
   /**
-   * symmetric headless simulation (tournament harness): no blocking events,
-   * no player special-casing — every lab is AI-driven and plays by rival rules
+   * symmetric headless simulation (harness): no player special-casing — every
+   * lab is AI-driven and answers its own events instantly (nothing blocks)
    */
   sim?: boolean;
 }

@@ -1,79 +1,110 @@
 import { BAL, clamp, clamp100 } from './balance';
 import { flagship, rebalanceAllocations } from './model';
 import { makeExec, makeStar, starFieldLabel } from './people';
+import { pushFeed } from './feed';
 import { chance, pick, pickWeighted, randRange } from './rng';
 import type { ActiveEvent, Executive, GameState, Lab, Star } from './types';
 
 /**
- * Blocking events target the PLAYER lab and pause the game until answered.
- * Rival labs face equivalent pressure through the systemic simulation
- * (trust drift, jailbreak rolls, their AI decisions), not through this file.
+ * Events are SYMMETRIC: every lab climbs its own government ladder and draws
+ * from the same random-event pool. For the human player they surface as
+ * blocking modals; for AI labs they are auto-answered (see tick.ts) via the
+ * lab's strategy `events` map, then `aiChoice`, then the first choice.
+ *
+ * Event scope:
+ *   'lab'         (default) — fires per-lab, acts on that lab
+ *   'world'       — global market/supply shocks; rolled once (the "world
+ *                   roller": the player in real games, the first alive lab in
+ *                   sim games) so backlog/adoption don't swing 4× per week
+ *   'player-only' — pure player-facing flavor (the EU meme events)
  */
 
 export interface ChoiceDef {
   id: string;
   label: string;
-  detail: (state: GameState, data: Record<string, unknown>) => string;
+  detail: (state: GameState, lab: Lab, data: Record<string, unknown>) => string;
   /** returns the resolution text for the feed */
-  apply: (state: GameState, data: Record<string, unknown>) => string;
+  apply: (state: GameState, lab: Lab, data: Record<string, unknown>) => string;
 }
 
 export interface EventDef {
   id: string;
-  title: string | ((state: GameState, data: Record<string, unknown>) => string);
-  body: (state: GameState, data: Record<string, unknown>) => string;
+  scope?: 'lab' | 'world' | 'player-only';
+  title: string | ((state: GameState, lab: Lab, data: Record<string, unknown>) => string);
+  body: (state: GameState, lab: Lab, data: Record<string, unknown>) => string;
   /** relative weight; 0 = cannot fire now */
-  weight: (state: GameState) => number;
+  weight: (state: GameState, lab: Lab) => number;
   /** prepare event payload (e.g. generate the star being offered) */
-  setup?: (state: GameState) => Record<string, unknown>;
+  setup?: (state: GameState, lab: Lab) => Record<string, unknown>;
+  /** which choice id an AI-controlled lab takes; defaults to the first choice */
+  aiChoice?: (state: GameState, lab: Lab, data: Record<string, unknown>) => string;
   cooldown?: number; // weeks before it may fire again (default BAL.EVENT_COOLDOWN)
   once?: boolean;
   choices: ChoiceDef[];
-}
-
-function player(state: GameState): Lab {
-  return state.labs[state.playerLab];
 }
 
 function fmtM(x: number): string {
   return x >= 1000 ? `$${(x / 1000).toFixed(1)}B` : `$${Math.round(x)}M`;
 }
 
-const cap = (state: GameState) => flagship(player(state))?.capability ?? 0;
+const capOf = (lab: Lab) => flagship(lab)?.capability ?? 0;
+
+/** Is this lab the human player in a real (non-sim) game? */
+function isHuman(state: GameState, lab: Lab): boolean {
+  return !state.sim && lab.id === state.playerLab;
+}
+
+/**
+ * Remove a lab (board removal / nationalization): ends the game for the human,
+ * otherwise just kills the AI lab and lets the world continue.
+ */
+function removeLab(state: GameState, lab: Lab, reason: string, title: string, body: string): void {
+  if (isHuman(state, lab)) {
+    if (!state.gameOver) {
+      state.gameOver = { result: 'loss', reason, byLab: lab.id, title, body, week: state.week };
+      state.pendingEvents = [];
+    }
+    return;
+  }
+  lab.alive = false;
+  lab.deathReason = reason;
+  pushFeed(state, 'ticker', `${lab.name} is gone`, reason === 'nationalized' ? 'Their government took the keys.' : 'Their board tore itself apart.', { tag: 'RIVALS' });
+}
 
 // ------------------------------------------------------------------ people
 
 const newStarEvent: EventDef = {
   id: 'star-on-market',
-  title: (_s, d) => `Researcher on the market: ${(d.star as Star).name}`,
-  body: (_s, d) => {
+  title: (_s, _l, d) => `Researcher on the market: ${(d.star as Star).name}`,
+  body: (_s, _l, d) => {
     const star = d.star as Star;
     return `${star.name} (${starFieldLabel(star.field)} ${'★'.repeat(star.tier)} · +${star.bonus}% ${starFieldLabel(star.field)}) just left a rival lab and is taking meetings. Asking ${fmtM(star.salary * 52)}/yr. Every week you wait, someone else might sign them.`;
   },
   weight: (s) => (s.week > 6 ? 3 : 0),
   cooldown: 10,
   setup: (s) => ({ star: makeStar(s.rng) }),
+  aiChoice: (_s, lab, d) => (lab.cash > (d.star as Star).salary * 52 * 2 ? 'hire' : 'pass'),
   choices: [
     {
       id: 'hire',
       label: 'Sign them',
-      detail: (_s, d) => {
+      detail: (_s, _l, d) => {
         const star = d.star as Star;
         return `${fmtM(star.salary * 52)}/yr · +${star.bonus}% ${starFieldLabel(star.field)}`;
       },
-      apply: (s, d) => {
+      apply: (_s, lab, d) => {
         const star = d.star as Star;
-        player(s).stars.push(star);
-        return `${star.name} signed with ${player(s).name}.`;
+        lab.stars.push(star);
+        return `${star.name} signed with ${lab.name}.`;
       },
     },
     {
       id: 'pass',
       label: 'Pass',
       detail: () => 'a rival lab may sign them',
-      apply: (s, d) => {
+      apply: (s, lab, d) => {
         const star = d.star as Star;
-        const rivals = Object.values(s.labs).filter((l) => l.alive && l.id !== s.playerLab);
+        const rivals = Object.values(s.labs).filter((l) => l.alive && l.id !== lab.id);
         if (rivals.length && chance(s.rng, 0.6)) {
           const lucky = pick(s.rng, rivals);
           lucky.stars.push(star);
@@ -90,11 +121,10 @@ const newStarEvent: EventDef = {
  * afford — richer stars need richer suitors (≈ tier years of the raised salary
  * in cash). A broke lab never bids for your superstar.
  */
-function poachablePairs(state: GameState): { star: Star; rival: Lab }[] {
-  const p = player(state);
-  const rivals = Object.values(state.labs).filter((l) => l.alive && l.id !== state.playerLab);
+function poachablePairs(state: GameState, lab: Lab): { star: Star; rival: Lab }[] {
+  const rivals = Object.values(state.labs).filter((l) => l.alive && l.id !== lab.id);
   const pairs: { star: Star; rival: Lab }[] = [];
-  for (const star of p.stars) {
+  for (const star of lab.stars) {
     const askCash = star.salary * 1.5 * 52 * (1 + star.tier); // tier+1 years of the offer, in the bank
     for (const rival of rivals) {
       if (rival.cash >= askCash) pairs.push({ star, rival });
@@ -105,25 +135,26 @@ function poachablePairs(state: GameState): { star: Star; rival: Lab }[] {
 
 const rivalPoachEvent: EventDef = {
   id: 'rival-poach',
-  title: (_s, d) => `${(d.rivalName as string)} is poaching ${(d.star as Star).name}`,
-  body: (_s, d) => {
+  title: (_s, _l, d) => `${d.rivalName as string} is poaching ${(d.star as Star).name}`,
+  body: (_s, _l, d) => {
     const star = d.star as Star;
     return `Your ${starFieldLabel(star.field)} lead ${star.name} (${'★'.repeat(star.tier)} · +${star.bonus}% ${starFieldLabel(star.field)} · ${fmtM(star.salary * 52)}/yr) has an offer at ${d.rivalName as string} for 1.5× their salary — and ${d.rivalName as string} has the cash to mean it. Your move.`;
   },
-  weight: (s) => (poachablePairs(s).length > 0 ? 2.5 : 0),
+  weight: (s, lab) => (poachablePairs(s, lab).length > 0 ? 2.5 : 0),
   cooldown: 16,
-  setup: (s) => {
-    const { star, rival } = pick(s.rng, poachablePairs(s));
+  setup: (s, lab) => {
+    const { star, rival } = pick(s.rng, poachablePairs(s, lab));
     return { star, rivalName: rival.name, rivalId: rival.id };
   },
+  aiChoice: (_s, lab, d) => (lab.cash > (d.star as Star).salary * 78 * 2 ? 'counter' : 'letgo'),
   choices: [
     {
       id: 'counter',
       label: 'Match it — 1.5× their salary',
-      detail: (_s, d) => `salary ${fmtM((d.star as Star).salary * 52)} → ${fmtM((d.star as Star).salary * 78)}/yr, they stay`,
-      apply: (s, d) => {
+      detail: (_s, _l, d) => `salary ${fmtM((d.star as Star).salary * 52)} → ${fmtM((d.star as Star).salary * 78)}/yr, they stay`,
+      apply: (_s, lab, d) => {
         const star = d.star as Star;
-        const mine = player(s).stars.find((x) => x.id === star.id);
+        const mine = lab.stars.find((x) => x.id === star.id);
         if (mine) mine.salary = Math.round(mine.salary * 1.5 * 10) / 10;
         return `${star.name} stays — at one and a half times the price.`;
       },
@@ -132,10 +163,9 @@ const rivalPoachEvent: EventDef = {
       id: 'letgo',
       label: 'Let them go',
       detail: () => 'lose the bonus; save the salary',
-      apply: (s, d) => {
+      apply: (s, lab, d) => {
         const star = d.star as Star;
-        const p = player(s);
-        p.stars = p.stars.filter((x) => x.id !== star.id);
+        lab.stars = lab.stars.filter((x) => x.id !== star.id);
         const rival = s.labs[d.rivalId as keyof typeof s.labs];
         if (rival?.alive) rival.stars.push({ ...star, salary: Math.round(star.salary * 1.5 * 10) / 10 });
         return `${star.name} left for ${d.rivalName as string}.`;
@@ -148,8 +178,8 @@ const HIREABLE_ROLES = ['coo', 'cto', 'cfo', 'research', 'alignment', 'comms'] a
 
 const execCandidateEvent: EventDef = {
   id: 'exec-candidate',
-  title: (_s, d) => `C-suite candidate: ${(d.exec as { name: string }).name}`,
-  body: (s, d) => {
+  title: (_s, _l, d) => `C-suite candidate: ${(d.exec as { name: string }).name}`,
+  body: (_s, lab, d) => {
     const roleNames: Record<string, string> = { coo: 'COO', cto: 'CTO', cfo: 'CFO', research: 'Head of Research', alignment: 'Head of Alignment', comms: 'Head of Communications' };
     const e = d.exec as Executive;
     const stats =
@@ -166,74 +196,76 @@ const execCandidateEvent: EventDef = {
                 : e.role === 'comms'
                   ? `${e.commsBonus}% slower trust decay`
                   : `charisma ${e.charisma} · credibility ${e.credibility}`;
-    const incumbent = player(s).csuite[e.role];
+    const incumbent = lab.csuite[e.role];
     return `A strong candidate for ${roleNames[e.role]} is available: ${stats}. ${incumbent ? `They would replace ${incumbent.name}.` : 'The seat is vacant.'} Headhunters say they won't wait long.`;
   },
-  weight: (s) => {
-    const p = player(s);
-    const vacant = HIREABLE_ROLES.filter((r) => !p.csuite[r]);
+  weight: (_s, lab) => {
+    const vacant = HIREABLE_ROLES.filter((r) => !lab.csuite[r]);
     return vacant.length > 0 ? 4 : 1; // vacant seats get priority; upgrades still trickle in
   },
   cooldown: 18,
-  setup: (s) => {
-    const p = player(s);
-    const vacant = HIREABLE_ROLES.filter((r) => !p.csuite[r]);
+  setup: (s, lab) => {
+    const vacant = HIREABLE_ROLES.filter((r) => !lab.csuite[r]);
     const role = vacant.length ? pick(s.rng, vacant) : pick(s.rng, HIREABLE_ROLES);
     return { exec: makeExec(s.rng, role, 0.55 + randRange(s.rng, 0, 0.4)) };
+  },
+  aiChoice: (_s, lab, d) => {
+    const e = d.exec as Executive;
+    const vacant = !lab.csuite[e.role];
+    // fill an empty seat when it's affordable; don't churn a filled seat
+    return vacant && lab.cash > e.salary * 52 * 2 ? 'hire' : 'pass';
   },
   choices: [
     {
       id: 'hire',
       label: 'Hire them',
-      detail: (_s, d) => {
+      detail: (_s, _l, d) => {
         const e = d.exec as { salary: number };
         return `${fmtM(e.salary * 52)}/yr · replaces the current holder if any`;
       },
-      apply: (s, d) => {
+      apply: (_s, lab, d) => {
         const e = d.exec as ReturnType<typeof makeExec>;
-        player(s).csuite[e.role] = e;
+        lab.csuite[e.role] = e;
         return `${e.name} joined as ${e.role.toUpperCase()}.`;
       },
     },
-    { id: 'pass', label: 'Pass', detail: () => 'keep looking', apply: (_s, d) => `Passed on ${(d.exec as { name: string }).name}.` },
+    { id: 'pass', label: 'Pass', detail: () => 'keep looking', apply: (_s, _l, d) => `Passed on ${(d.exec as { name: string }).name}.` },
   ],
 };
 
 // ------------------------------------------------------------------ board / investors
 // Board events are gated on boardPressure = discontent × investor seat share,
-// escalating from pointed questions all the way to removal (game over).
-// Gambles resolve on your CEO's charisma.
+// escalating from pointed questions all the way to removal. Gambles resolve on
+// the lab CEO's charisma.
 
 /** discontent (0..100) scaled by how much of the board the investors hold */
-function boardPressure(state: GameState): number {
-  const p = player(state);
-  return p.discontent * (p.boardInvestors / (p.boardYours + p.boardInvestors));
+function boardPressure(lab: Lab): number {
+  return lab.discontent * (lab.boardInvestors / (lab.boardYours + lab.boardInvestors));
 }
 
 /** charm gamble: base odds at charisma 50, ±0.5% per point */
-function charismaRoll(state: GameState, base: number): boolean {
-  const cha = player(state).csuite.ceo?.charisma ?? 50;
+function charismaRoll(state: GameState, lab: Lab, base: number): boolean {
+  const cha = lab.csuite.ceo?.charisma ?? 50;
   return chance(state.rng, clamp(base + (cha - 50) * 0.005, 0.1, 0.92));
 }
 
 const boardQuestionsEvent: EventDef = {
   id: 'board-questions',
   title: 'Pointed questions from the board',
-  body: (s) => `Discontent is at ${Math.round(player(s).discontent)}, and this quarter's board meeting has an unusually specific agenda: burn rate, "science projects", your calendar. They want answers, in person.`,
-  weight: (s) => (boardPressure(s) > 4 ? 2.5 : 0),
+  body: (_s, lab) => `Discontent is at ${Math.round(lab.discontent)}, and this quarter's board meeting has an unusually specific agenda: burn rate, "science projects", your calendar. They want answers, in person.`,
+  weight: (_s, lab) => (boardPressure(lab) > 4 ? 2.5 : 0),
   cooldown: 14,
   choices: [
     {
       id: 'answer',
       label: 'Walk them through everything',
       detail: () => 'charisma gamble: discontent −6 — or +6 if you fumble it',
-      apply: (s) => {
-        const p = player(s);
-        if (charismaRoll(s, 0.6)) {
-          p.discontent = clamp(p.discontent - 6, 0, 100);
+      apply: (s, lab) => {
+        if (charismaRoll(s, lab, 0.6)) {
+          lab.discontent = clamp(lab.discontent - 6, 0, 100);
           return 'Three hours of questions, answered nicely. The meeting ended with handshakes instead of motions.';
         }
-        p.discontent = clamp(p.discontent + 6, 0, 100);
+        lab.discontent = clamp(lab.discontent + 6, 0, 100);
         return 'You got defensive on question two and it went downhill from there. The minutes read like an indictment.';
       },
     },
@@ -242,22 +274,18 @@ const boardQuestionsEvent: EventDef = {
 
 const boardResolutionEvent: EventDef = {
   id: 'board-resolution',
-  title: 'Binding resolution: hit the number',
-  body: (_s, d) => `The board just passed a binding resolution: ${fmtM(d.target as number)}/week in revenue within ${d.weeks as number} weeks. Nobody asked how. That part is your job.`,
-  weight: (s) => (boardPressure(s) > 8 && !player(s).revenueExpectation ? 2.5 : 0),
+  title: (_s, _l, d) => `Binding resolution: hit ${fmtM(d.target as number)}/wk`,
+  body: (_s, _l, d) => `The board just passed a binding resolution: ${fmtM(d.target as number)}/week in revenue within ${d.weeks as number} weeks. Nobody asked how. That part is your job.`,
+  weight: (_s, lab) => (boardPressure(lab) > 8 && !lab.revenueExpectation ? 2.5 : 0),
   cooldown: 28,
-  setup: (s) => {
-    const p = player(s);
-    return { target: Math.max(Math.round(p.weeklyRevenue * 1.35), Math.round(p.weeklyRevenue) + 40), weeks: 18 };
-  },
+  setup: (_s, lab) => ({ target: Math.max(Math.round(lab.weeklyRevenue * 1.35), Math.round(lab.weeklyRevenue) + 40), weeks: 18 }),
   choices: [
     {
       id: 'ok',
       label: 'Acknowledge the resolution',
-      detail: (_s, d) => `revenue target ${fmtM(d.target as number)}/wk in ${d.weeks as number} weeks · miss = discontent + valuation hit`,
-      apply: (s, d) => {
-        const p = player(s);
-        p.revenueExpectation = { target: d.target as number, deadlineWeek: s.week + (d.weeks as number) };
+      detail: (_s, _l, d) => `revenue target ${fmtM(d.target as number)}/wk in ${d.weeks as number} weeks · miss = discontent + valuation hit`,
+      apply: (s, lab, d) => {
+        lab.revenueExpectation = { target: d.target as number, deadlineWeek: s.week + (d.weeks as number) };
         return `The board's number is on the wall: ${fmtM(d.target as number)}/wk. The countdown is running.`;
       },
     },
@@ -266,12 +294,12 @@ const boardResolutionEvent: EventDef = {
 
 const boardHostileCooEvent: EventDef = {
   id: 'board-hostile-coo',
-  title: (_s, d) => `The board has a COO for you: ${(d.exec as Executive).name}`,
-  body: (_s, d) => {
+  title: (_s, _l, d) => `The board has a COO for you: ${(d.exec as Executive).name}`,
+  body: (_s, _l, d) => {
     const e = d.exec as Executive;
     return `The investor bloc wants "operational discipline" — specifically, ${e.name}, a turnaround operator with their trust and none of yours. Your current COO would be out. So, eventually, might be anything the board doesn't like.`;
   },
-  weight: (s) => (boardPressure(s) > 14 ? 2 : 0),
+  weight: (_s, lab) => (boardPressure(lab) > 14 ? 2 : 0),
   cooldown: 30,
   setup: (s) => {
     const e = makeExec(s.rng, 'coo', 0.5 + randRange(s.rng, 0, 0.3));
@@ -283,9 +311,9 @@ const boardHostileCooEvent: EventDef = {
       id: 'refuse',
       label: 'Refuse — you run operations',
       detail: () => 'charisma gamble: they back down — or discontent +10',
-      apply: (s) => {
-        if (charismaRoll(s, 0.55)) return 'You stared them down. The board was bluffing — the candidate quietly withdraws.';
-        player(s).discontent = clamp(player(s).discontent + 10, 0, 100);
+      apply: (s, lab) => {
+        if (charismaRoll(s, lab, 0.55)) return 'You stared them down. The board was bluffing — the candidate quietly withdraws.';
+        lab.discontent = clamp(lab.discontent + 10, 0, 100);
         return 'You refused. The investor bloc now opens every meeting with the org chart.';
       },
     },
@@ -293,11 +321,10 @@ const boardHostileCooEvent: EventDef = {
       id: 'accept',
       label: 'Install them',
       detail: () => 'discontent −8 now · they feed the board discontent weekly while installed · replaces your COO',
-      apply: (s, d) => {
-        const p = player(s);
+      apply: (_s, lab, d) => {
         const e = d.exec as Executive;
-        p.csuite.coo = e;
-        p.discontent = clamp(p.discontent - 8, 0, 100);
+        lab.csuite.coo = e;
+        lab.discontent = clamp(lab.discontent - 8, 0, 100);
         return `${e.name} is your COO now. Their first act: a standing Friday call with the investor directors. Replace them when you find someone better.`;
       },
     },
@@ -307,17 +334,18 @@ const boardHostileCooEvent: EventDef = {
 const boardRealignmentEvent: EventDef = {
   id: 'board-realignment',
   title: 'Boardroom realignment',
-  body: (s) => `A motion is circulating to "broaden governance experience" — by replacing one of your loyal directors with an investor pick. You hold ${player(s).boardYours} of 9 seats. Seats lost this way never come back.`,
-  weight: (s) => (boardPressure(s) > 20 && player(s).boardYours > 3 ? 2.5 : 0),
+  body: (_s, lab) => `A motion is circulating to "broaden governance experience" — by replacing one of your loyal directors with an investor pick. You hold ${lab.boardYours} of 9 seats. Seats lost this way never come back.`,
+  weight: (_s, lab) => (boardPressure(lab) > 20 && lab.boardYours > 3 ? 2.5 : 0),
   cooldown: 32,
+  aiChoice: (_s, lab) => (lab.boardYours > 4 ? 'resist' : 'concede'),
   choices: [
     {
       id: 'resist',
       label: 'Fight the motion',
       detail: () => 'charisma gamble: the motion dies — or discontent +18',
-      apply: (s) => {
-        if (charismaRoll(s, 0.5)) return 'You worked the phones all weekend. The motion died in committee, 5–4.';
-        player(s).discontent = clamp(player(s).discontent + 18, 0, 100);
+      apply: (s, lab) => {
+        if (charismaRoll(s, lab, 0.5)) return 'You worked the phones all weekend. The motion died in committee, 5–4.';
+        lab.discontent = clamp(lab.discontent + 18, 0, 100);
         return 'You fought it and lost the room doing it. The motion failed, but the board now treats you as the problem.';
       },
     },
@@ -325,11 +353,10 @@ const boardRealignmentEvent: EventDef = {
       id: 'concede',
       label: 'Let the seat go',
       detail: () => 'your seats −1 · discontent −10',
-      apply: (s) => {
-        const p = player(s);
-        p.boardYours -= 1;
-        p.boardInvestors += 1;
-        p.discontent = clamp(p.discontent - 10, 0, 100);
+      apply: (_s, lab) => {
+        lab.boardYours -= 1;
+        lab.boardInvestors += 1;
+        lab.discontent = clamp(lab.discontent - 10, 0, 100);
         return 'Your ally cleaned out their desk. The new director sends long emails with the word "fiduciary" in them.';
       },
     },
@@ -339,29 +366,28 @@ const boardRealignmentEvent: EventDef = {
 const boardNoConfidenceEvent: EventDef = {
   id: 'board-no-confidence',
   title: 'Vote of no confidence',
-  body: (s) => `It's on the agenda, item one: a vote of no confidence in the CEO. You hold ${player(s).boardYours} of 9 seats and discontent is ${Math.round(player(s).discontent)}. Time to give the speech of your life.`,
-  weight: (s) => (player(s).discontent > 60 && player(s).boardYours <= 4 ? 3.5 : 0),
+  body: (_s, lab) => `It's on the agenda, item one: a vote of no confidence in the CEO. You hold ${lab.boardYours} of 9 seats and discontent is ${Math.round(lab.discontent)}. Time to give the speech of your life.`,
+  weight: (_s, lab) => (lab.discontent > 60 && lab.boardYours <= 4 ? 3.5 : 0),
   cooldown: 20,
   choices: [
     {
       id: 'face',
       label: 'Face the vote',
       detail: () => 'charisma gamble: flip a seat to you, discontent −12 — or lose a seat, discontent +15',
-      apply: (s) => {
-        const p = player(s);
-        if (charismaRoll(s, 0.5)) {
-          if (p.boardInvestors > 0) {
-            p.boardYours += 1;
-            p.boardInvestors -= 1;
+      apply: (s, lab) => {
+        if (charismaRoll(s, lab, 0.5)) {
+          if (lab.boardInvestors > 0) {
+            lab.boardYours += 1;
+            lab.boardInvestors -= 1;
           }
-          p.discontent = clamp(p.discontent - 12, 0, 100);
+          lab.discontent = clamp(lab.discontent - 12, 0, 100);
           return 'You survived it — and one investor director liked the speech enough to switch sides.';
         }
-        if (p.boardYours > 0) {
-          p.boardYours -= 1;
-          p.boardInvestors += 1;
+        if (lab.boardYours > 0) {
+          lab.boardYours -= 1;
+          lab.boardInvestors += 1;
         }
-        p.discontent = clamp(p.discontent + 15, 0, 100);
+        lab.discontent = clamp(lab.discontent + 15, 0, 100);
         return 'You survived the vote by one. A wavering ally defected mid-meeting, and everyone saw it.';
       },
     },
@@ -371,23 +397,22 @@ const boardNoConfidenceEvent: EventDef = {
 const boardRemovalEvent: EventDef = {
   id: 'board-removal',
   title: 'The board moves to remove you',
-  body: (s) => `Security is already in the lobby. With ${player(s).boardYours} of 9 seats and discontent at ${Math.round(player(s).discontent)}, the outcome was arithmetic. The vote is a formality, and so are you.`,
-  weight: (s) => (player(s).discontent > 80 && player(s).boardYours <= 3 ? 6 : 0),
+  body: (_s, lab) => `Security is already in the lobby. With ${lab.boardYours} of 9 seats and discontent at ${Math.round(lab.discontent)}, the outcome was arithmetic. The vote is a formality, and so are you.`,
+  weight: (_s, lab) => (lab.discontent > 80 && lab.boardYours <= 3 ? 6 : 0),
   cooldown: 8,
   choices: [
     {
       id: 'end',
       label: 'Attend your last board meeting',
       detail: () => 'game over',
-      apply: (s) => {
-        s.gameOver = {
-          result: 'loss',
-          reason: 'voted-out',
-          title: 'The board votes you out',
-          body: `The investor bloc finally moved, ${9 - player(s).boardYours} votes to ${player(s).boardYours}. Security walks you out past the model vault. The new CEO's first memo is about "returning to fundamentals".`,
-          week: s.week,
-        };
-        s.pendingEvents = [];
+      apply: (s, lab) => {
+        removeLab(
+          s,
+          lab,
+          'voted-out',
+          'The board votes you out',
+          `The investor bloc finally moved, ${9 - lab.boardYours} votes to ${lab.boardYours}. Security walks you out past the model vault. The new CEO's first memo is about "returning to fundamentals".`,
+        );
         return 'The board has removed you.';
       },
     },
@@ -397,13 +422,13 @@ const boardRemovalEvent: EventDef = {
 // ------------------------------------------------------------------ public
 // Public events are gated on public trust: the lower it sits, the nastier the
 // draw — bad press → campaigns → lawsuits/leaks → firebombing → political
-// capture. Damage-control gambles run on your CEO's charisma.
+// capture. Damage-control gambles run on the lab CEO's charisma.
 
 const badPressEvent: EventDef = {
   id: 'bad-press',
   title: 'A bad story is about to run',
-  body: (_s, d) => `${d.flavor as string} The reporter gave you 48 hours to comment.`,
-  weight: (s) => (player(s).publicTrust < 50 ? 1.8 : 0),
+  body: (_s, _l, d) => `${d.flavor as string} The reporter gave you 48 hours to comment.`,
+  weight: (_s, lab) => (lab.publicTrust < 50 ? 1.8 : 0),
   cooldown: 20,
   setup: (s) => ({
     flavor: pick(s.rng, [
@@ -417,9 +442,8 @@ const badPressEvent: EventDef = {
       id: 'nothing',
       label: 'Let it run',
       detail: () => 'public trust −4 · adoption −0.5',
-      apply: (s) => {
-        const p = player(s);
-        p.publicTrust = clamp100(p.publicTrust - 4);
+      apply: (s, lab) => {
+        lab.publicTrust = clamp100(lab.publicTrust - 4);
         s.world.adoption = clamp100(s.world.adoption - 0.5);
         return 'The story ran, trended for a day, and joined the pile. The pile is getting tall.';
       },
@@ -428,10 +452,9 @@ const badPressEvent: EventDef = {
       id: 'bury',
       label: 'Bury the story',
       detail: () => 'charisma gamble: it dies quietly — or the burial leaks: public trust −9, adoption −1',
-      apply: (s) => {
-        const p = player(s);
-        if (charismaRoll(s, 0.55)) return 'A well-placed call, a competing exclusive, a Friday news dump. The story died before lunch.';
-        p.publicTrust = clamp100(p.publicTrust - 9);
+      apply: (s, lab) => {
+        if (charismaRoll(s, lab, 0.55)) return 'A well-placed call, a competing exclusive, a Friday news dump. The story died before lunch.';
+        lab.publicTrust = clamp100(lab.publicTrust - 9);
         s.world.adoption = clamp100(s.world.adoption - 1);
         return 'The burial attempt became the story. "LAB TRIED TO KILL THIS PIECE" outperformed the piece.';
       },
@@ -443,19 +466,18 @@ const organizedCampaignEvent: EventDef = {
   id: 'organized-campaign',
   title: 'An organized campaign against you',
   body: () => 'It has a name, a logo, a former employee as spokesperson and a media calendar. Coordinated op-eds, campus chapters, a pledge circulating at conferences: "I will not work for them."',
-  weight: (s) => (player(s).publicTrust < 35 ? 2.5 : 0),
+  weight: (_s, lab) => (lab.publicTrust < 35 ? 2.5 : 0),
   cooldown: 24,
   choices: [
     {
       id: 'weather',
       label: 'Weather it',
       detail: () => 'public trust −4 · adoption −0.8 · the hiring pool cools for a while',
-      apply: (s) => {
-        const p = player(s);
-        p.publicTrust = clamp100(p.publicTrust - 4);
+      apply: (s, lab) => {
+        lab.publicTrust = clamp100(lab.publicTrust - 4);
         s.world.adoption = clamp100(s.world.adoption - 0.8);
         // researchers stop taking your calls — the star market goes quiet
-        s.eventCooldowns['star-on-market'] = s.week + 8;
+        lab.eventCooldowns['star-on-market'] = s.week + 8;
         return 'The campaign rolls on. Two candidates ghosted your recruiters this week, citing "the pledge".';
       },
     },
@@ -465,39 +487,35 @@ const organizedCampaignEvent: EventDef = {
 const classActionEvent: EventDef = {
   id: 'class-action',
   title: 'Class-action lawsuit certified',
-  body: (_s, d) => `A court just certified the class: everyone whose ${d.flavor as string}. The plaintiffs' firm has billboards. Settle, or roll the dice at trial.`,
-  weight: (s) => (player(s).publicTrust < 45 && s.world.adoption > 20 ? 1.8 : 0),
+  body: (_s, _l, d) => `A court just certified the class: everyone whose ${d.flavor as string}. The plaintiffs' firm has billboards. Settle, or roll the dice at trial.`,
+  weight: (s, lab) => (lab.publicTrust < 45 && s.world.adoption > 20 ? 1.8 : 0),
   cooldown: 30,
-  setup: (s) => {
-    const p = player(s);
-    return {
-      flavor: pick(s.rng, ['work product trained your model without consent', 'chatbot sessions were retained after deletion', 'job application was auto-rejected by your model']),
-      settle: Math.min(Math.max(400, Math.round(p.weeklyRevenue * 3)), 2500),
-    };
-  },
+  setup: (s, lab) => ({
+    flavor: pick(s.rng, ['work product trained your model without consent', 'chatbot sessions were retained after deletion', 'job application was auto-rejected by your model']),
+    settle: Math.min(Math.max(400, Math.round(lab.weeklyRevenue * 3)), 2500),
+  }),
   choices: [
     {
       id: 'settle',
       label: 'Settle',
-      detail: (_s, d) => `−${fmtM(d.settle as number)} now, it goes away`,
-      apply: (s, d) => {
-        player(s).cash -= d.settle as number;
-        return 'Settled without admission of wrongdoing. The billboards come down; the plaintiffs\' firm buys a boat.';
+      detail: (_s, _l, d) => `−${fmtM(d.settle as number)} now, it goes away`,
+      apply: (_s, lab, d) => {
+        lab.cash -= d.settle as number;
+        return "Settled without admission of wrongdoing. The billboards come down; the plaintiffs' firm buys a boat.";
       },
     },
     {
       id: 'fight',
       label: 'Fight it in court',
-      detail: (_s, d) => `charisma gamble: dismissed, public trust +4 — or lose: −${fmtM((d.settle as number) * 2.5)}, public trust −8`,
-      apply: (s, d) => {
-        const p = player(s);
-        if (charismaRoll(s, 0.5)) {
-          p.publicTrust = clamp100(p.publicTrust + 4);
+      detail: (_s, _l, d) => `charisma gamble: dismissed, public trust +4 — or lose: −${fmtM((d.settle as number) * 2.5)}, public trust −8`,
+      apply: (s, lab, d) => {
+        if (charismaRoll(s, lab, 0.5)) {
+          lab.publicTrust = clamp100(lab.publicTrust + 4);
           return 'Dismissed with prejudice. Your general counsel frames the ruling; the press calls you "vindicated".';
         }
-        p.cash -= (d.settle as number) * 2.5;
-        p.publicTrust = clamp100(p.publicTrust - 8);
-        return 'The jury took four hours. The verdict is a number with a lot of zeros, and the appeal would take years you don\'t have.';
+        lab.cash -= (d.settle as number) * 2.5;
+        lab.publicTrust = clamp100(lab.publicTrust - 8);
+        return "The jury took four hours. The verdict is a number with a lot of zeros, and the appeal would take years you don't have.";
       },
     },
   ],
@@ -507,17 +525,16 @@ const insiderLeakEvent: EventDef = {
   id: 'insider-leak',
   title: 'An insider is about to blow the whistle',
   body: () => 'A senior researcher has documents showing your dangerous-capability evals were "sanitized" before the board saw them. They are talking to a journalist and a Senate staffer. You have days, maybe hours.',
-  weight: (s) => (player(s).publicTrust < 40 || player(s).discontent > 45 ? 2 : 0),
+  weight: (_s, lab) => (lab.publicTrust < 40 || lab.discontent > 45 ? 2 : 0),
   cooldown: 32,
   choices: [
     {
       id: 'nothing',
       label: 'Let it happen',
       detail: () => 'public trust −6 · govt trust −5',
-      apply: (s) => {
-        const p = player(s);
-        p.publicTrust = clamp100(p.publicTrust - 6);
-        p.govTrust = clamp100(p.govTrust - 5);
+      apply: (_s, lab) => {
+        lab.publicTrust = clamp100(lab.publicTrust - 6);
+        lab.govTrust = clamp100(lab.govTrust - 5);
         return 'The story ran with your name in the headline and "sanitized" in quotes. Two agencies opened inquiries.';
       },
     },
@@ -525,11 +542,10 @@ const insiderLeakEvent: EventDef = {
       id: 'intimidate',
       label: 'Lean on them',
       detail: () => 'charisma gamble: they reconsider — or it backfires: public trust −12, govt trust −10',
-      apply: (s) => {
-        const p = player(s);
-        if (charismaRoll(s, 0.55)) return 'A quiet conversation about NDAs, equity vesting and "everyone\'s bright future". They reconsidered.';
-        p.publicTrust = clamp100(p.publicTrust - 12);
-        p.govTrust = clamp100(p.govTrust - 10);
+      apply: (s, lab) => {
+        if (charismaRoll(s, lab, 0.55)) return 'A quiet conversation about NDAs, equity vesting and "everyone\'s bright future". They reconsidered.';
+        lab.publicTrust = clamp100(lab.publicTrust - 12);
+        lab.govTrust = clamp100(lab.govTrust - 10);
         return 'They recorded the conversation. Now the story is the cover-up, the leak AND the intimidation — a trilogy.';
       },
     },
@@ -540,17 +556,16 @@ const dcFirebombEvent: EventDef = {
   id: 'dc-firebombing',
   title: 'Datacenter firebombed',
   body: () => 'At 3 AM, someone put incendiaries through the intake vents of your newest facility. A group calling itself "the Butlerians" claims credit, and half the internet is quietly cheering them on.',
-  weight: (s) => (player(s).publicTrust < BAL.PUBLIC_TRUST_LOW ? 2.5 : 0),
+  weight: (_s, lab) => (lab.publicTrust < BAL.PUBLIC_TRUST_LOW ? 2.5 : 0),
   cooldown: 26,
   choices: [
     {
       id: 'ok',
       label: 'Assess the damage',
-      detail: (s) => `lose ~4% of fleet (${Math.floor(player(s).chips * 0.04).toLocaleString()} chips)`,
-      apply: (s) => {
-        const p = player(s);
-        const lost = Math.floor(p.chips * 0.04);
-        p.chips -= lost;
+      detail: (_s, lab) => `lose ~4% of fleet (${Math.floor(lab.chips * 0.04).toLocaleString()} chips)`,
+      apply: (_s, lab) => {
+        const lost = Math.floor(lab.chips * 0.04);
+        lab.chips -= lost;
         return `Arson confirmed: ${lost.toLocaleString()} chips destroyed. When the public hates you this much, some of them bring accelerants.`;
       },
     },
@@ -560,17 +575,17 @@ const dcFirebombEvent: EventDef = {
 const politicalCaptureEvent: EventDef = {
   id: 'political-capture',
   title: 'The anti-AI caucus takes the gavel',
-  body: (s) =>
-    `With your public approval in the gutter, being against you is now good politics. ${player(s).country === 'us' ? 'The new subcommittee chair ran ads with your logo over ominous music.' : 'A Politburo member made "AI discipline" his signature issue.'} Hearings are scheduled; the fear is institutional now.`,
-  weight: (s) => (player(s).publicTrust < 32 ? 2 : 0),
+  body: (_s, lab) =>
+    `With your public approval in the gutter, being against you is now good politics. ${lab.country === 'us' ? 'The new subcommittee chair ran ads with your logo over ominous music.' : 'A Politburo member made "AI discipline" his signature issue.'} Hearings are scheduled; the fear is institutional now.`,
+  weight: (_s, lab) => (lab.publicTrust < 32 ? 2 : 0),
   cooldown: 40,
   choices: [
     {
       id: 'ok',
       label: 'Noted',
       detail: () => 'home govt risk fear +12',
-      apply: (s) => {
-        const g = s.govs[player(s).country];
+      apply: (s, lab) => {
+        const g = s.govs[lab.country];
         g.riskFear = clamp(g.riskFear + 12, BAL.FEAR_FLOOR, 100);
         return 'Public anger has become political machinery. The government now fears your models — because voters do.';
       },
@@ -579,11 +594,14 @@ const politicalCaptureEvent: EventDef = {
 };
 
 // ------------------------------------------------------------------ chips / world
+// scope 'world': rolled once per week by the world roller (player, or first
+// alive lab in sim), so global supply/adoption shocks don't compound per-lab.
 
 const chipCrunchEvent: EventDef = {
   id: 'chip-crunch',
+  scope: 'world',
   title: 'Chip supply shock',
-  body: (_s, d) => d.flavor as string,
+  body: (_s, _l, d) => d.flavor as string,
   weight: () => 1.5,
   cooldown: 22,
   setup: (s) => ({
@@ -608,6 +626,7 @@ const chipCrunchEvent: EventDef = {
 
 const newFabEvent: EventDef = {
   id: 'new-fab',
+  scope: 'world',
   title: 'New fab comes online',
   body: () => 'A long-promised fab is finally producing at volume. Supply loosens.',
   weight: (s) => (s.world.backlog > 300_000 ? 2 : 0.8),
@@ -627,8 +646,9 @@ const newFabEvent: EventDef = {
 
 const viralMomentEvent: EventDef = {
   id: 'viral-moment',
-  title: (_s, d) => d.title as string,
-  body: (_s, d) => d.body as string,
+  scope: 'world',
+  title: (_s, _l, d) => d.title as string,
+  body: (_s, _l, d) => d.body as string,
   weight: () => 1.2,
   cooldown: 20,
   setup: (s) =>
@@ -641,15 +661,14 @@ const viralMomentEvent: EventDef = {
     {
       id: 'ok',
       label: 'Noted',
-      detail: (_s, d) => ((d.good as boolean) ? 'public trust +4 · adoption +1' : 'public trust −4'),
-      apply: (s, d) => {
-        const p = player(s);
+      detail: (_s, _l, d) => ((d.good as boolean) ? 'public trust +4 · adoption +1' : 'public trust −4'),
+      apply: (s, lab, d) => {
         if (d.good as boolean) {
-          p.publicTrust = clamp100(p.publicTrust + 4);
+          lab.publicTrust = clamp100(lab.publicTrust + 4);
           s.world.adoption = clamp100(s.world.adoption + 1);
           return 'A very good week for the brand.';
         }
-        p.publicTrust = clamp100(p.publicTrust - 4);
+        lab.publicTrust = clamp100(lab.publicTrust - 4);
         return 'A very bad week for the brand.';
       },
     },
@@ -657,13 +676,15 @@ const viralMomentEvent: EventDef = {
 };
 
 // ------------------------------------------------------------------ EU meme events
+// scope 'player-only': pure flavor, never fire for rivals or in sim games.
 
 const euAiActEvent: EventDef = {
   id: 'eu-ai-act',
+  scope: 'player-only',
   title: 'EU AI Act: Annex XIV(b) applies to you',
   body: () =>
     'Brussels has determined your flagship is a "systemic-risk general-purpose model with transversal capabilities" under Annex XIV(b). Compliance requires a 340-page technical file, a fundamental-rights impact assessment, and a risk taxonomy in all 24 official languages.',
-  weight: (s) => (cap(s) > 30 ? 1.5 : 0),
+  weight: (_s, lab) => (capOf(lab) > 30 ? 1.5 : 0),
   cooldown: 45,
   choices: [
     {
@@ -683,6 +704,7 @@ const euAiActEvent: EventDef = {
 
 const euUsbCEvent: EventDef = {
   id: 'eu-usb-c',
+  scope: 'player-only',
   title: 'EU mandates USB-C on datacenters',
   body: () =>
     'The Radio Equipment Directive has been extended: all "compute delivery endpoints" must expose a universal charging port. Your lawyers believe this technically includes your H100 racks. Nobody is sure. The Commission is also unsure but confident.',
@@ -707,10 +729,11 @@ const euUsbCEvent: EventDef = {
 
 const euGdprEvent: EventDef = {
   id: 'eu-gdpr-forget',
+  scope: 'player-only',
   title: 'GDPR erasure request: the model must forget Klaus',
   body: () =>
     'A German citizen has filed a Right to Erasure request covering "all weights, activations and vibes" pertaining to him. Your engineers point out this is not how any of this works. His lawyer disagrees, in writing, frequently.',
-  weight: (s) => (cap(s) > 25 ? 1.2 : 0),
+  weight: (_s, lab) => (capOf(lab) > 25 ? 1.2 : 0),
   cooldown: 50,
   choices: [
     {
@@ -730,6 +753,7 @@ const euGdprEvent: EventDef = {
 
 const euCernEvent: EventDef = {
   id: 'eu-cern-ai',
+  scope: 'player-only',
   title: 'EU launches "CERN for AI"',
   body: () =>
     'The Commission has unveiled EuroMind: a €500M moonshot to build a sovereign European frontier lab by 2033. It will be headquartered in three cities simultaneously, and the compute tender specifies chips that are "ethical, explainable, and ideally from before 2020".',
@@ -754,6 +778,7 @@ const euCernEvent: EventDef = {
 
 const euCookieEvent: EventDef = {
   id: 'eu-cookie-chat',
+  scope: 'player-only',
   title: 'Chatbots must serve cookie banners',
   body: () =>
     'A new ePrivacy interpretation requires your model to obtain consent before every conversation, including consent about the consent dialog. Early tests show users click "Reject All" and then complain the model won\'t answer.',
@@ -778,10 +803,9 @@ const euCookieEvent: EventDef = {
 
 // ------------------------------------------------------------------ govt ladder
 // Escalating procurement offers from the HOME government, offered strictly in
-// order and gated on govt trust. Rejecting an offer costs a little trust and
-// freezes the whole ladder (including bonus offers) for GOV_RETRY_COOLDOWN,
-// after which the same rung is offered again. Scheduled by rollGovLadder, not
-// by the random-event dice.
+// order and gated on govt trust. Every lab climbs its own ladder. Rejecting an
+// offer costs a little trust and freezes the whole ladder for GOV_RETRY_COOLDOWN.
+// Scheduled by rollGovLadder, not by the random-event dice.
 
 interface OfferTuning {
   trust: number;
@@ -802,11 +826,11 @@ interface GovOfferSpec {
   tuning: () => OfferTuning;
   contractName: (us: boolean) => string;
   title: (us: boolean) => string;
-  body: (s: GameState, d: Record<string, unknown>) => string;
+  body: (s: GameState, lab: Lab, d: Record<string, unknown>) => string;
   acceptLabel: string;
   rejectLabel: string;
   extraAcceptDetail?: string;
-  onAccept?: (s: GameState) => void;
+  onAccept?: (s: GameState, lab: Lab) => void;
   acceptText: (us: boolean) => string;
   rejectText: (us: boolean) => string;
 }
@@ -814,13 +838,13 @@ interface GovOfferSpec {
 function govOffer(spec: GovOfferSpec): EventDef {
   return {
     id: spec.id,
-    title: (s) => spec.title(player(s).country === 'us'),
+    title: (_s, lab) => spec.title(lab.country === 'us'),
     body: spec.body,
     weight: () => 0, // never fires from the random pool — scheduled by rollGovLadder
-    setup: (s) => {
+    aiChoice: () => 'accept',
+    setup: (_s, lab) => {
       const t = spec.tuning();
-      const p = player(s);
-      const chips = t.chipFrac > 0 ? Math.min(t.maxChips, Math.max(t.minChips, Math.round((p.chips * t.chipFrac) / 500) * 500)) : 0;
+      const chips = t.chipFrac > 0 ? Math.min(t.maxChips, Math.max(t.minChips, Math.round((lab.chips * t.chipFrac) / 500) * 500)) : 0;
       const pay = Math.round(chips * BAL.CHIP_OPEX * t.payMult);
       return { chips, pay, upfront: pay * t.upfrontWeeks, cash: t.cash };
     },
@@ -828,7 +852,7 @@ function govOffer(spec: GovOfferSpec): EventDef {
       {
         id: 'accept',
         label: spec.acceptLabel,
-        detail: (_s, d) => {
+        detail: (_s, _l, d) => {
           const t = spec.tuning();
           const parts: string[] = [];
           if (d.cash as number) parts.push(`+${fmtM(d.cash as number)} now`);
@@ -839,30 +863,28 @@ function govOffer(spec: GovOfferSpec): EventDef {
           parts.push(`govt trust +${t.trustGain}`);
           return parts.join(' · ');
         },
-        apply: (s, d) => {
+        apply: (s, lab, d) => {
           const t = spec.tuning();
-          const p = player(s);
-          p.cash += (d.cash as number) + (d.upfront as number);
+          lab.cash += (d.cash as number) + (d.upfront as number);
           if ((d.chips as number) > 0) {
-            p.contracts.push({ id: `${spec.id}-${s.week}`, name: spec.contractName(p.country === 'us'), weeklyPay: d.pay as number, chips: d.chips as number, startedWeek: s.week });
-            rebalanceAllocations(p);
+            lab.contracts.push({ id: `${spec.id}-${s.week}`, name: spec.contractName(lab.country === 'us'), weeklyPay: d.pay as number, chips: d.chips as number, startedWeek: s.week });
+            rebalanceAllocations(lab);
           }
-          p.govTrust = clamp100(p.govTrust + t.trustGain);
-          if (spec.rung !== null) s.govLadder.rung = spec.rung + 1;
-          else s.govLadder.done.push(spec.id);
-          spec.onAccept?.(s);
-          return spec.acceptText(p.country === 'us');
+          lab.govTrust = clamp100(lab.govTrust + t.trustGain);
+          if (spec.rung !== null) lab.govLadder.rung = spec.rung + 1;
+          else lab.govLadder.done.push(spec.id);
+          spec.onAccept?.(s, lab);
+          return spec.acceptText(lab.country === 'us');
         },
       },
       {
         id: 'reject',
         label: spec.rejectLabel,
         detail: () => `govt trust −${spec.tuning().trustLoss} · no offers for a while — they will try this one again`,
-        apply: (s) => {
-          const p = player(s);
-          p.govTrust = clamp100(p.govTrust - spec.tuning().trustLoss);
-          s.govLadder.rejectedUntil = s.week + BAL.GOV_RETRY_COOLDOWN;
-          return spec.rejectText(p.country === 'us');
+        apply: (s, lab) => {
+          lab.govTrust = clamp100(lab.govTrust - spec.tuning().trustLoss);
+          lab.govLadder.rejectedUntil = s.week + BAL.GOV_RETRY_COOLDOWN;
+          return spec.rejectText(lab.country === 'us');
         },
       },
     ],
@@ -876,8 +898,8 @@ export const GOV_LADDER_EVENTS: EventDef[] = [
     tuning: () => BAL.GOV_LADDER[0],
     contractName: () => '',
     title: (us) => (us ? 'AISI evaluation grant' : 'CAC evaluation mandate'),
-    body: (s, d) =>
-      player(s).country === 'us'
+    body: (_s, lab, d) =>
+      lab.country === 'us'
         ? `The AI Safety Institute offers a ${fmtM(d.cash as number)} grant for structured evaluation access to your flagship. Small money — but this is how the government decides who it can do business with.`
         : `The Cyberspace Administration offers ${fmtM(d.cash as number)} to run its evaluation suite against your flagship. It is phrased as an offer.`,
     acceptLabel: 'Take the grant',
@@ -891,8 +913,8 @@ export const GOV_LADDER_EVENTS: EventDef[] = [
     tuning: () => BAL.GOV_LADDER[1],
     contractName: (us) => (us ? 'GSA pilot contract' : 'Provincial pilot mandate'),
     title: (us) => (us ? 'Federal pilot contract' : 'Provincial pilot mandate'),
-    body: (s, d) =>
-      `${player(s).country === 'us' ? 'The GSA wants a pilot: your model working benefits paperwork in one federal agency' : 'Zhejiang province wants a pilot: your model working permit backlogs in one provincial office'}, on ${(d.chips as number).toLocaleString()} dedicated chips. ${fmtM(d.pay as number)}/wk plus ${fmtM(d.upfront as number)} up front. Deliver, and bigger doors open.`,
+    body: (_s, lab, d) =>
+      `${lab.country === 'us' ? 'The GSA wants a pilot: your model working benefits paperwork in one federal agency' : 'Zhejiang province wants a pilot: your model working permit backlogs in one provincial office'}, on ${(d.chips as number).toLocaleString()} dedicated chips. ${fmtM(d.pay as number)}/wk plus ${fmtM(d.upfront as number)} up front. Deliver, and bigger doors open.`,
     acceptLabel: 'Sign the pilot',
     rejectLabel: 'Pass',
     acceptText: () => 'The pilot is live. Civil servants are quietly amazed; the procurement office is taking notes.',
@@ -904,8 +926,8 @@ export const GOV_LADDER_EVENTS: EventDef[] = [
     tuning: () => BAL.GOV_LADDER[2],
     contractName: (us) => (us ? 'Civilian agency deployment' : 'Provincial services deployment'),
     title: () => 'Civilian agency deployment',
-    body: (s, d) =>
-      `${player(s).country === 'us' ? 'The pilot delivered. Now the tax authority, the benefits agency and the immigration service all want in' : 'The pilot delivered. The State Council wants the rollout extended across provincial service bureaus'} — a standing deployment on ${(d.chips as number).toLocaleString()} chips for ${fmtM(d.pay as number)}/wk plus ${fmtM(d.upfront as number)} up front.`,
+    body: (_s, lab, d) =>
+      `${lab.country === 'us' ? 'The pilot delivered. Now the tax authority, the benefits agency and the immigration service all want in' : 'The pilot delivered. The State Council wants the rollout extended across provincial service bureaus'} — a standing deployment on ${(d.chips as number).toLocaleString()} chips for ${fmtM(d.pay as number)}/wk plus ${fmtM(d.upfront as number)} up front.`,
     acceptLabel: 'Sign the deployment',
     rejectLabel: 'Pass',
     acceptText: () => 'Your model now answers the phone for the government. Reliable money, and the relationship deepens.',
@@ -917,8 +939,8 @@ export const GOV_LADDER_EVENTS: EventDef[] = [
     tuning: () => BAL.GOV_LADDER[3],
     contractName: (us) => (us ? 'Classified IC contract' : 'MSS tasking order'),
     title: (us) => (us ? 'Classified contract: the IC wants in' : 'Classified tasking: the MSS wants in'),
-    body: (s, d) =>
-      `${player(s).country === 'us' ? 'The intelligence community wants your model on analysis workloads in a cleared facility' : 'The Ministry of State Security wants your model on analysis workloads in a secured facility'} — ${(d.chips as number).toLocaleString()} chips behind a fence you don't control, for ${fmtM(d.pay as number)}/wk plus ${fmtM(d.upfront as number)} up front. You will not be told what it reads.`,
+    body: (_s, lab, d) =>
+      `${lab.country === 'us' ? 'The intelligence community wants your model on analysis workloads in a cleared facility' : 'The Ministry of State Security wants your model on analysis workloads in a secured facility'} — ${(d.chips as number).toLocaleString()} chips behind a fence you don't control, for ${fmtM(d.pay as number)}/wk plus ${fmtM(d.upfront as number)} up front. You will not be told what it reads.`,
     acceptLabel: 'Take the clearance',
     rejectLabel: 'Stay out of the classified world',
     acceptText: () => 'The cleared facility hums day and night. The checks clear. You try not to think about the queries.',
@@ -930,8 +952,8 @@ export const GOV_LADDER_EVENTS: EventDef[] = [
     tuning: () => BAL.GOV_LADDER[4],
     contractName: (us) => (us ? 'Strategic supplier program' : 'National supplier program'),
     title: () => 'Strategic supplier designation',
-    body: (s, d) =>
-      `${player(s).country === 'us' ? 'The Pentagon wants you designated a strategic supplier: a standing, multi-agency compute commitment with a procurement fast lane' : 'The State Council wants you designated a national supplier: a standing compute mandate across ministries'} — ${(d.chips as number).toLocaleString()} chips, ${fmtM(d.pay as number)}/wk, ${fmtM(d.upfront as number)} up front. You would be infrastructure now.`,
+    body: (_s, lab, d) =>
+      `${lab.country === 'us' ? 'The Pentagon wants you designated a strategic supplier: a standing, multi-agency compute commitment with a procurement fast lane' : 'The State Council wants you designated a national supplier: a standing compute mandate across ministries'} — ${(d.chips as number).toLocaleString()} chips, ${fmtM(d.pay as number)}/wk, ${fmtM(d.upfront as number)} up front. You would be infrastructure now.`,
     acceptLabel: 'Accept the designation',
     rejectLabel: 'Stay a vendor',
     acceptText: () => 'You are infrastructure now. The money is superb and the leash is real.',
@@ -943,13 +965,13 @@ export const GOV_LADDER_EVENTS: EventDef[] = [
     tuning: () => BAL.GOV_LADDER[5],
     contractName: () => 'Sovereign compute operations',
     title: () => 'Sovereign compute buildout',
-    body: (s, d) =>
-      `${player(s).country === 'us' ? 'Congress funded it; they want you to build and run it' : 'The Five-Year Plan funds it; you are to build and run it'}: a national AI compute complex. ${fmtM(d.cash as number)} lands in your account and the fabs give you sovereign priority — but ${(d.chips as number).toLocaleString()} of your chips run government workloads, permanently.`,
+    body: (_s, lab, d) =>
+      `${lab.country === 'us' ? 'Congress funded it; they want you to build and run it' : 'The Five-Year Plan funds it; you are to build and run it'}: a national AI compute complex. ${fmtM(d.cash as number)} lands in your account and the fabs give you sovereign priority — but ${(d.chips as number).toLocaleString()} of your chips run government workloads, permanently.`,
     acceptLabel: 'Build it',
     rejectLabel: 'Refuse the buildout',
     extraAcceptDetail: 'chip prices −20% forever',
-    onAccept: (s) => {
-      player(s).sovereignCompute = true;
+    onAccept: (_s, lab) => {
+      lab.sovereignCompute = true;
     },
     acceptText: () => 'Ground breaks within the month. Your buying power at the fabs is now a matter of national policy.',
     rejectText: () => 'You refused a national project with your name already on the press release. That stung, and they showed it.',
@@ -966,8 +988,8 @@ const sectorMegadealEvent = govOffer({
   tuning: () => ({ ...BAL.GOV_MEGADEAL, cash: 0 }),
   contractName: (us) => (us ? 'Sector megadeal' : 'Sector mandate'),
   title: () => 'Sector megadeal',
-  body: (s, d) => {
-    const war = hasAll(player(s), T1_WARFARE);
+  body: (_s, lab, d) => {
+    const war = hasAll(lab, T1_WARFARE);
     return `Your ${war ? 'defense portfolio has every service branch lining up' : 'biomedical portfolio has every health agency lining up'} — the government wants to consolidate it into one sector-wide deal: ${(d.chips as number).toLocaleString()} chips, ${fmtM(d.pay as number)}/wk, ${fmtM(d.upfront as number)} up front.`;
   },
   acceptLabel: 'Consolidate the sector',
@@ -982,12 +1004,12 @@ const nationalChampionEvent = govOffer({
   tuning: () => ({ ...BAL.GOV_CHAMPION, upfrontWeeks: 0 }),
   contractName: () => 'National champion program',
   title: () => 'National champion',
-  body: (s, d) =>
-    `${player(s).country === 'us' ? 'Washington' : 'Beijing'} has made its decision: you are the instrument of national strategy. The package: ${fmtM(d.cash as number)} and a contract your CFO keeps re-reading in disbelief — ${(d.chips as number).toLocaleString()} chips at ${fmtM(d.pay as number)}/wk. The other government is not amused.`,
+  body: (_s, lab, d) =>
+    `${lab.country === 'us' ? 'Washington' : 'Beijing'} has made its decision: you are the instrument of national strategy. The package: ${fmtM(d.cash as number)} and a contract your CFO keeps re-reading in disbelief — ${(d.chips as number).toLocaleString()} chips at ${fmtM(d.pay as number)}/wk. The other government is not amused.`,
   acceptLabel: 'Accept the mandate',
   rejectLabel: 'Decline the crown',
-  onAccept: (s) => {
-    const rivalGov = s.govs[player(s).country === 'us' ? 'prc' : 'us'];
+  onAccept: (s, lab) => {
+    const rivalGov = s.govs[lab.country === 'us' ? 'prc' : 'us'];
     rivalGov.raceFear = 100;
   },
   acceptText: () => 'NATIONAL CHAMPION. The government has picked its horse: you. The rival government just moved to a war footing.',
@@ -1008,23 +1030,23 @@ const GOV_BONUS_OFFERS: { def: EventDef; trust: number; unlocked: (lab: Lab) => 
 export const GOV_CRACKDOWN_EVENTS: EventDef[] = [
   {
     id: 'gov-hearing',
-    title: (s) => (player(s).country === 'us' ? 'Summoned: public hearing' : 'Summoned: closed session'),
-    body: (s) =>
-      `Government trust is ${Math.round(player(s).govTrust)}. ${player(s).country === 'us' ? 'A Senate subcommittee wants you under oath, on camera,' : 'The CAC "invites" you to a closed session'} to explain what your lab owes the country. Played right, this resets the relationship. Played wrong, it gets worse in public.`,
+    title: (_s, lab) => (lab.country === 'us' ? 'Summoned: public hearing' : 'Summoned: closed session'),
+    body: (_s, lab) =>
+      `Government trust is ${Math.round(lab.govTrust)}. ${lab.country === 'us' ? 'A Senate subcommittee wants you under oath, on camera,' : 'The CAC "invites" you to a closed session'} to explain what your lab owes the country. Played right, this resets the relationship. Played wrong, it gets worse in public.`,
     weight: () => 0,
+    aiChoice: () => 'testify',
     choices: [
       {
         id: 'testify',
         label: 'Take the stand yourself',
         detail: () => `${Math.round(BAL.HEARING_WIN_CHANCE * 100)}%: govt trust +${BAL.HEARING_TRUST_GAIN} · otherwise govt trust −${BAL.HEARING_TRUST_LOSS}, public trust −${BAL.HEARING_PUBLIC_LOSS}`,
-        apply: (s) => {
-          const p = player(s);
+        apply: (s, lab) => {
           if (chance(s.rng, BAL.HEARING_WIN_CHANCE)) {
-            p.govTrust = clamp100(p.govTrust + BAL.HEARING_TRUST_GAIN);
+            lab.govTrust = clamp100(lab.govTrust + BAL.HEARING_TRUST_GAIN);
             return 'You were candid, prepared and human. The clip of you correcting the chairman politely went viral — in your favor.';
           }
-          p.govTrust = clamp100(p.govTrust - BAL.HEARING_TRUST_LOSS);
-          p.publicTrust = clamp100(p.publicTrust - BAL.HEARING_PUBLIC_LOSS);
+          lab.govTrust = clamp100(lab.govTrust - BAL.HEARING_TRUST_LOSS);
+          lab.publicTrust = clamp100(lab.publicTrust - BAL.HEARING_PUBLIC_LOSS);
           return 'It went badly. The freeze-frame of your face during question four is now a meme.';
         },
       },
@@ -1032,8 +1054,8 @@ export const GOV_CRACKDOWN_EVENTS: EventDef[] = [
         id: 'lawyers',
         label: 'Send the lawyers',
         detail: () => 'govt trust −3 · no surprises',
-        apply: (s) => {
-          player(s).govTrust = clamp100(player(s).govTrust - 3);
+        apply: (_s, lab) => {
+          lab.govTrust = clamp100(lab.govTrust - 3);
           return 'Your counsel answered every question without answering anything. The committee noticed the empty chair.';
         },
       },
@@ -1042,16 +1064,16 @@ export const GOV_CRACKDOWN_EVENTS: EventDef[] = [
   {
     id: 'gov-binding-regs',
     title: 'Binding compute regulations',
-    body: (s) =>
-      `${player(s).country === 'us' ? 'Congress passed it and the President signed it' : 'The State Council issued the directive'}: training runs on ${BAL.BINDING_REGS_CHIP_MIN.toLocaleString()}+ chips now require licensing, reporting and third-party monitoring. Your counsel reviewed all 600 pages and found no appeal — only compliance.`,
+    body: (_s, lab) =>
+      `${lab.country === 'us' ? 'Congress passed it and the President signed it' : 'The State Council issued the directive'}: training runs on ${BAL.BINDING_REGS_CHIP_MIN.toLocaleString()}+ chips now require licensing, reporting and third-party monitoring. Your counsel reviewed all 600 pages and found no appeal — only compliance.`,
     weight: () => 0,
     choices: [
       {
         id: 'comply',
         label: 'Comply',
         detail: () => `runs on ≥${BAL.BINDING_REGS_CHIP_MIN.toLocaleString()} chips train ${Math.round(BAL.BINDING_REGS_SLOWDOWN * 100)}% slower — permanent`,
-        apply: (s) => {
-          player(s).bindingRegulations = true;
+        apply: (_s, lab) => {
+          lab.bindingRegulations = true;
           return 'The compliance office is hiring. Your big training runs now move at the speed of paperwork.';
         },
       },
@@ -1060,16 +1082,16 @@ export const GOV_CRACKDOWN_EVENTS: EventDef[] = [
   {
     id: 'gov-oversight',
     title: 'Embedded oversight',
-    body: (s) =>
-      `${player(s).country === 'us' ? 'A federal monitor team moves into your building this month' : 'A Party work team moves into your building this month'} — badge access, read access, veto meetings. The compliance apparatus they require comes out of your top line, indefinitely.`,
+    body: (_s, lab) =>
+      `${lab.country === 'us' ? 'A federal monitor team moves into your building this month' : 'A Party work team moves into your building this month'} — badge access, read access, veto meetings. The compliance apparatus they require comes out of your top line, indefinitely.`,
     weight: () => 0,
     choices: [
       {
         id: 'accept',
         label: 'Open the doors',
         detail: () => `revenue −${Math.round(BAL.OVERSIGHT_REVENUE_CUT * 100)}% ongoing`,
-        apply: (s) => {
-          player(s).oversightCut = BAL.OVERSIGHT_REVENUE_CUT;
+        apply: (_s, lab) => {
+          lab.oversightCut = BAL.OVERSIGHT_REVENUE_CUT;
           return 'The monitors have their own floor now. Every product decision routes through people who bill by the hour.';
         },
       },
@@ -1078,22 +1100,18 @@ export const GOV_CRACKDOWN_EVENTS: EventDef[] = [
   {
     id: 'gov-requisition',
     title: 'Compute requisition',
-    body: (s, d) =>
-      `Under ${player(s).country === 'us' ? 'the Defense Production Act' : 'a national security directive'}, ${(d.chips as number).toLocaleString()} of your chips are hereby commandeered for government workloads. Compensation: a receipt.`,
+    body: (_s, lab, d) =>
+      `Under ${lab.country === 'us' ? 'the Defense Production Act' : 'a national security directive'}, ${(d.chips as number).toLocaleString()} of your chips are hereby commandeered for government workloads. Compensation: a receipt.`,
     weight: () => 0,
-    setup: (s) => {
-      const p = player(s);
-      return { chips: Math.max(500, Math.round((p.chips * BAL.REQUISITION_FRAC) / 500) * 500) };
-    },
+    setup: (_s, lab) => ({ chips: Math.max(500, Math.round((lab.chips * BAL.REQUISITION_FRAC) / 500) * 500) }),
     choices: [
       {
         id: 'comply',
         label: 'Hand over the racks',
-        detail: (_s, d) => `${(d.chips as number).toLocaleString()} chips locked · pays nothing`,
-        apply: (s, d) => {
-          const p = player(s);
-          p.contracts.push({ id: `gov-requisition-${s.week}`, name: 'Requisitioned compute', weeklyPay: 0, chips: d.chips as number, startedWeek: s.week });
-          rebalanceAllocations(p);
+        detail: (_s, _l, d) => `${(d.chips as number).toLocaleString()} chips locked · pays nothing`,
+        apply: (s, lab, d) => {
+          lab.contracts.push({ id: `gov-requisition-${s.week}`, name: 'Requisitioned compute', weeklyPay: 0, chips: d.chips as number, startedWeek: s.week });
+          rebalanceAllocations(lab);
           return `${(d.chips as number).toLocaleString()} chips now run workloads you are not cleared to see, for free.`;
         },
       },
@@ -1101,24 +1119,23 @@ export const GOV_CRACKDOWN_EVENTS: EventDef[] = [
   },
   {
     id: 'gov-nationalization',
-    title: (s) => (player(s).country === 'us' ? 'Nationalization: the DPA order' : 'Nationalization: state takeover'),
-    body: (s) =>
-      `${player(s).country === 'us' ? 'Federal marshals arrive with the signed order at 6 AM.' : 'The Party committee arrives before breakfast.'} Hearings, regulations, monitors, requisitions — every step was a warning. Years of burned trust end the only way they could.`,
+    title: (_s, lab) => (lab.country === 'us' ? 'Nationalization: the DPA order' : 'Nationalization: state takeover'),
+    body: (_s, lab) =>
+      `${lab.country === 'us' ? 'Federal marshals arrive with the signed order at 6 AM.' : 'The Party committee arrives before breakfast.'} Hearings, regulations, monitors, requisitions — every step was a warning. Years of burned trust end the only way they could.`,
     weight: () => 0,
     choices: [
       {
         id: 'end',
         label: 'It ends here',
         detail: () => 'game over',
-        apply: (s) => {
-          s.gameOver = {
-            result: 'loss',
-            reason: 'nationalized',
-            title: player(s).country === 'us' ? 'Nationalized under the DPA' : 'Nationalized by the state',
-            body: 'The government spent years telling you exactly what it wanted and you kept saying no. Now it runs your lab, and you get a lanyard that no longer opens the model vault.',
-            week: s.week,
-          };
-          s.pendingEvents = [];
+        apply: (s, lab) => {
+          removeLab(
+            s,
+            lab,
+            'nationalized',
+            lab.country === 'us' ? 'Nationalized under the DPA' : 'Nationalized by the state',
+            'The government spent years telling you exactly what it wanted and you kept saying no. Now it runs your lab, and you get a lanyard that no longer opens the model vault.',
+          );
           return 'The government has taken the keys.';
         },
       },
@@ -1161,60 +1178,77 @@ export const EVENTS: EventDef[] = [
 
 export const EVENTS_BY_ID: Record<string, EventDef> = Object.fromEntries([...EVENTS, ...GOV_EVENTS].map((e) => [e.id, e]));
 
-function materializeEvent(state: GameState, def: EventDef): ActiveEvent {
-  const data = def.setup ? def.setup(state) : {};
+/** Is `lab` the designated roller for 'world'-scope events this week? */
+function isWorldRoller(state: GameState, lab: Lab): boolean {
+  if (!state.sim) return lab.id === state.playerLab;
+  const first = Object.values(state.labs).find((l) => l.alive);
+  return first?.id === lab.id;
+}
+
+/** Which scopes may fire for this lab. */
+function scopeAllowed(state: GameState, lab: Lab, scope: EventDef['scope']): boolean {
+  const s = scope ?? 'lab';
+  if (s === 'lab') return true;
+  if (s === 'world') return isWorldRoller(state, lab);
+  return isHuman(state, lab); // 'player-only'
+}
+
+function materializeEvent(state: GameState, lab: Lab, def: EventDef): ActiveEvent {
+  const data = def.setup ? def.setup(state, lab) : {};
   return {
     eventId: def.id,
+    labId: lab.id,
     week: state.week,
-    title: typeof def.title === 'function' ? def.title(state, data) : def.title,
-    body: def.body(state, data),
-    choices: def.choices.map((c) => ({ id: c.id, label: c.label, detail: c.detail(state, data) })),
+    title: typeof def.title === 'function' ? def.title(state, lab, data) : def.title,
+    body: def.body(state, lab, data),
+    choices: def.choices.map((c) => ({ id: c.id, label: c.label, detail: c.detail(state, lab, data) })),
     data,
   };
 }
 
-/** Roll the weekly event dice; returns a materialized blocking event or null. */
-export function rollEvent(state: GameState): ActiveEvent | null {
-  const baseChance = Math.min(BAL.EVENT_CHANCE_MAX, BAL.EVENT_BASE_CHANCE + BAL.EVENT_CHANCE_PER_WEEK * state.week) + state.weeksSinceEvent * BAL.EVENT_DROUGHT_BOOST;
+/** Roll the weekly event dice for one lab; returns a materialized event or null. */
+export function rollEvent(state: GameState, lab: Lab): ActiveEvent | null {
+  const baseChance = Math.min(BAL.EVENT_CHANCE_MAX, BAL.EVENT_BASE_CHANCE + BAL.EVENT_CHANCE_PER_WEEK * state.week) + lab.weeksSinceEvent * BAL.EVENT_DROUGHT_BOOST;
   if (!chance(state.rng, baseChance)) {
-    state.weeksSinceEvent += 1;
+    lab.weeksSinceEvent += 1;
     return null;
   }
   const candidates = EVENTS.filter((e) => {
-    const last = state.eventCooldowns[e.id];
+    if (!scopeAllowed(state, lab, e.scope)) return false;
+    const last = lab.eventCooldowns[e.id];
     if (last !== undefined && e.once) return false;
     if (last !== undefined && state.week - last < (e.cooldown ?? BAL.EVENT_COOLDOWN)) return false;
-    return e.weight(state) > 0;
+    return e.weight(state, lab) > 0;
   });
   if (candidates.length === 0) {
-    state.weeksSinceEvent += 1;
+    lab.weeksSinceEvent += 1;
     return null;
   }
-  const def = pickWeighted(state.rng, candidates, candidates.map((e) => e.weight(state)));
-  state.eventCooldowns[def.id] = state.week;
-  state.weeksSinceEvent = 0;
-  return materializeEvent(state, def);
+  const def = pickWeighted(state.rng, candidates, candidates.map((e) => e.weight(state, lab)));
+  lab.eventCooldowns[def.id] = state.week;
+  lab.weeksSinceEvent = 0;
+  return materializeEvent(state, lab, def);
 }
 
 /**
- * Weekly govt-ladder check: at most one govt event per GOV_EVENT_MIN_GAP.
- * Crackdown steps escalate while trust is below GOV_CRACKDOWN_TRUST; otherwise
- * the next eligible offer (bonus first, then the core ladder rung) may land.
+ * Weekly govt-ladder check for one lab: at most one govt event per
+ * GOV_EVENT_MIN_GAP. Crackdown steps escalate while trust is below
+ * GOV_CRACKDOWN_TRUST; otherwise the next eligible offer (bonus first, then the
+ * core ladder rung) may land.
  */
-export function rollGovLadder(state: GameState): ActiveEvent | null {
-  const g = state.govLadder;
-  const p = player(state);
-  if (!p.alive) return null;
-  if (p.govTrust >= BAL.GOV_CRACKDOWN_RESET) g.crackdown = 0; // redemption resets the escalation
+export function rollGovLadder(state: GameState, lab: Lab): ActiveEvent | null {
+  const g = lab.govLadder;
+  if (!lab.alive) return null;
+  if (lab.govTrust >= BAL.GOV_CRACKDOWN_RESET) g.crackdown = 0; // redemption resets the escalation
   if (g.lastWeek > 0 && state.week - g.lastWeek < BAL.GOV_EVENT_MIN_GAP) return null;
 
   // crackdown escalates while trust is low — a rejection cooldown doesn't shield you
-  if (p.govTrust < BAL.GOV_CRACKDOWN_TRUST && g.crackdown < GOV_CRACKDOWN_EVENTS.length) {
+  if (lab.govTrust < BAL.GOV_CRACKDOWN_TRUST && g.crackdown < GOV_CRACKDOWN_EVENTS.length) {
     if (!chance(state.rng, BAL.GOV_CRACKDOWN_CHANCE)) return null;
     const def = GOV_CRACKDOWN_EVENTS[g.crackdown];
     g.crackdown += 1;
     g.lastWeek = state.week;
-    return materializeEvent(state, def);
+    return materializeEvent(state, lab, def);
   }
 
   // a rejected offer freezes the ladder — no offers, no higher rungs
@@ -1223,26 +1257,41 @@ export function rollGovLadder(state: GameState): ActiveEvent | null {
   // research-gated bonus offers take priority over the core ladder
   for (const bonus of GOV_BONUS_OFFERS) {
     if (g.done.includes(bonus.def.id)) continue;
-    if (p.govTrust < bonus.trust || !bonus.unlocked(p)) continue;
+    if (lab.govTrust < bonus.trust || !bonus.unlocked(lab)) continue;
     if (!chance(state.rng, BAL.GOV_OFFER_CHANCE)) return null;
     g.lastWeek = state.week;
-    return materializeEvent(state, bonus.def);
+    return materializeEvent(state, lab, bonus.def);
   }
 
   // next core rung
   if (g.rung >= GOV_LADDER_EVENTS.length) return null;
   const t = BAL.GOV_LADDER[g.rung];
-  if (state.week < t.week || p.govTrust < t.trust) return null;
+  if (state.week < t.week || lab.govTrust < t.trust) return null;
   // the evaluation grant is the deterministic opener; later rungs land probabilistically
   if (g.rung > 0 && !chance(state.rng, BAL.GOV_OFFER_CHANCE)) return null;
   g.lastWeek = state.week;
-  return materializeEvent(state, GOV_LADDER_EVENTS[g.rung]);
+  return materializeEvent(state, lab, GOV_LADDER_EVENTS[g.rung]);
 }
 
-/** Apply the player's chosen resolution; returns feed text. */
+/**
+ * The choice an AI-controlled lab makes for an event: the driving strategy's
+ * events map, then the event's own aiChoice, then the first choice.
+ */
+export function aiEventChoice(state: GameState, lab: Lab, event: ActiveEvent, stratChoice: string | undefined): string {
+  const def = EVENTS_BY_ID[event.eventId];
+  if (!def) return event.choices[0]?.id ?? '';
+  if (stratChoice && def.choices.some((c) => c.id === stratChoice)) return stratChoice;
+  const ai = def.aiChoice?.(state, lab, event.data);
+  if (ai && def.choices.some((c) => c.id === ai)) return ai;
+  return def.choices[0]?.id ?? '';
+}
+
+/** Apply a lab's chosen resolution; returns feed text. */
 export function resolveEvent(state: GameState, event: ActiveEvent, choiceId: string): string {
   const def = EVENTS_BY_ID[event.eventId];
   if (!def) return 'Event expired.';
+  const lab = state.labs[event.labId];
+  if (!lab) return 'Event expired.';
   const choice = def.choices.find((c) => c.id === choiceId) ?? def.choices[0];
-  return choice.apply(state, event.data);
+  return choice.apply(state, lab, event.data);
 }

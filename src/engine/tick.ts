@@ -18,14 +18,30 @@ import {
   winProbability,
 } from './model';
 import { labMods, RESEARCH_BY_ID } from './research';
-import { strategyAct } from './strategy';
+import { strategyAct, STRATEGY_BY_NAME } from './strategy';
 import { chance } from './rng';
 import { govTick, quadrant, trustTick, worldTick } from './world';
-import { rollEvent, rollGovLadder } from './events';
-import type { GameState, Lab } from './types';
+import { aiEventChoice, resolveEvent, rollEvent, rollGovLadder } from './events';
+import type { ActiveEvent, GameState, Lab } from './types';
 
 export function isPaused(state: GameState): boolean {
   return state.pendingEvents.length > 0 || state.gameOver !== null;
+}
+
+/** The human player's lab (never true in a symmetric sim game). */
+function isHuman(state: GameState, lab: Lab): boolean {
+  return !state.sim && lab.id === state.playerLab;
+}
+
+/**
+ * Auto-resolve an event for an AI-controlled lab: the driving strategy's
+ * event-answer map, then the event's own aiChoice, then the first choice. A
+ * handful of notable rival outcomes surface on the ticker.
+ */
+function answerAiEvent(state: GameState, lab: Lab, event: ActiveEvent): void {
+  const strat = lab.strategy ? STRATEGY_BY_NAME[lab.strategy] : undefined;
+  const choiceId = aiEventChoice(state, lab, event, strat?.events?.[event.eventId]);
+  resolveEvent(state, event, choiceId);
 }
 
 /** Advance the world by one week. No-op while a blocking event is pending. */
@@ -50,16 +66,21 @@ export function advanceWeek(state: GameState): void {
   endgameChecks(state);
   if (state.gameOver) return;
 
-  // govt ladder first; the random dice only roll on weeks the govt stays quiet.
-  // Tutorial games get a quiet world — the scripted tour must not be interrupted.
-  // Symmetric sim games have no blocking events at all (nobody to answer them).
-  if (!state.tutorial && !state.sim) {
-    const govEvent = rollGovLadder(state);
-    if (govEvent) {
-      state.pendingEvents.push(govEvent);
-    } else {
-      const event = rollEvent(state);
-      if (event) state.pendingEvents.push(event);
+  // events, per lab. Tutorial games get a quiet world — the scripted tour must
+  // not be interrupted. Every alive lab rolls its own gov ladder (quiet weeks
+  // only) then the random dice; AI labs answer instantly, the human's events
+  // queue as blocking modals.
+  if (!state.tutorial) {
+    for (const lab of Object.values(state.labs)) {
+      if (!lab.alive) continue;
+      const event = rollGovLadder(state, lab) ?? rollEvent(state, lab);
+      if (!event) continue;
+      if (isHuman(state, lab)) {
+        state.pendingEvents.push(event);
+      } else {
+        answerAiEvent(state, lab, event);
+        if (state.gameOver) return;
+      }
     }
   }
 

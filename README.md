@@ -8,11 +8,11 @@ Real-time management game: run one of four frontier AI labs from 2026 until some
 npm install
 npm run dev        # play at http://localhost:5173
 npm test           # vitest (engine + UI smoke tests)
-npm run sim        # balancing simulations (all strategies × 40 seeds)
-npm run sim -- racer 100   # one strategy, 100 seeds
-npx tsx src/sim/exploit.ts             # cheese/exploit sweep (19 degenerate + thoughtful bots)
-npx tsx src/sim/exploit.ts rsi-saint 150   # one exploit bot, 150 seeds
-npx tsx src/sim/debug.ts balanced 3   # single-game trace for debugging
+npm run sim        # the balance harness — all sections (containment / fairness / optimal / realgame)
+npm run sim -- --fast              # quick smoke pass (smaller N, leaner arbiter)
+npm run sim -- containment optimal # run only named sections
+npx tsx src/sim/trace.ts real optimal 3   # single-game trace (real asymmetric game)
+npx tsx src/sim/trace.ts sym balanced-racer,diplomat,hybrid,commerce-safety 3  # symmetric trace
 npm run lint && npm run typecheck
 npm run build
 ```
@@ -42,7 +42,7 @@ src/engine/    pure TypeScript, zero React/DOM imports
   init.ts        newGame(labId, seed, hintsEnabled)
   save.ts        serialize/deserialize
 
-src/sim/       headless balancing harness (strategies.ts + run.ts + debug.ts)
+src/sim/       balance harness (harness.ts) + single-game trace (trace.ts)
 src/ui/        React shell. Reads GameState, renders, dispatches engine actions.
                No game rules live here — redesign freely.
 ```
@@ -54,22 +54,15 @@ Rules for changes:
 - Everything that mutates `GameState` must flow through engine functions so player and AI labs stay symmetric and saves stay deterministic.
 - Randomness only via `state.rng` — never `Math.random()` in the engine.
 
-## Balance notes (current tuning)
+## The balance harness (`npm run sim`)
 
-From `npm run sim`, 40 seeds per strategy:
+One harness, four sections, all playing full games (events, gov ladder, jailbreaks) on a fixed seed schedule so every run faces identical worlds:
 
-| scripted strategy | outcome |
-|---|---|
-| passive (do nothing) | 0% win — bankruptcy or a reckless rival ends the world |
-| racer (capability only) | ~0% — reaches 100 first (~mid-2032) and fails the alignment roll |
-| balanced (race + alignment research) | ~35% win via aligned ASI |
-| safety (alignment first) | ~5% — too slow, loses to the rival clock |
-| diplomat (treaty track) | ~60% win via Global AI Pause (~2033) |
+- **containment** — each cheese strategy + 3 reasonable bots (symmetric). Gate: a cheese wins ≤5%, else exit code 1. The anti-cheese invariant.
+- **fairness** — the four reasonable strategies (`balanced-racer`, `commerce-safety`, `diplomat`, `hybrid`), all seat permutations. Watch that no single fixed line runs away with it.
+- **optimal** — the adaptive `optimal` bot (rolls each reasonable playbook to the end and switches to the winner) + 3 reasonable. Measures how much strategy-switching beats fixed play; chance among 4 seats is 25%.
+- **realgame** — `optimal` in the player seat of the real asymmetric game vs the actual in-game rivals. Closest to what a human faces.
 
-Games end 2032–2033; the effective clock is the fastest rival (usually AXIOM). Terminal jailbreaks are rare but real if you run high capability with low robustness.
+Games end ~2033–2035; the effective clock is the fastest rival (OPENAGI races capability with no alignment program by design — the doom pace-setter). Terminal jailbreaks are rare but real if you run high capability with low robustness.
 
-## Exploit sweep (anti-cheese)
-
-`src/sim/exploit.ts` plays ~16 degenerate single-minded strategies (bio money printer, warfare contract farm, treaty speedrun, alarm spam, chip-hoard + Compute Cap freeze, fundraise mashing, poach sabotage, RSI-saint alignment min-maxing, weak-to-strong ladders, price dumping, …) against 3 thoughtful bots. The invariant to keep: **no cheese bot should match or beat the intended playstyles** (balanced ~30%, diplomat ~50–60%). Re-run it after any economy, alignment or diplomacy change.
-
-Known failure mode this guards: unbounded money → mega chip fleet → `cbrt(chips)` alignment work grinding to the ceiling → one-shot alignment research stacking above the ceiling → near-free aligned-ASI roll. `ALIGN_CHIPS_CAP` in `balance.ts` (alignment compute saturates; the bottleneck is researchers, not GPUs) is the fix — don't remove it without re-running the sweep.
+Known cheese failure mode the containment gate guards: unbounded money → mega chip fleet → `cbrt(chips)` alignment work grinding to the ceiling → one-shot alignment research stacking above the ceiling → near-free aligned-ASI roll. `ALIGN_CHIPS_CAP` in `balance.ts` (alignment compute saturates; the bottleneck is researchers, not GPUs) is the fix — don't remove it without re-running containment.

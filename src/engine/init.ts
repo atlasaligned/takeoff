@@ -112,6 +112,9 @@ function makeLab(rng: RngState, seed: LabSeed, isPlayer: boolean): Lab {
     deathReason: null,
     profile: seed.profile,
     strategy: seed.strategy,
+    govLadder: { rung: 0, crackdown: 0, rejectedUntil: 0, lastWeek: 0, done: [] },
+    eventCooldowns: {},
+    weeksSinceEvent: 0,
   };
   // everyone starts with a CEO; the player's CEO is the player character
   lab.csuite.ceo = makeExec(rng, 'ceo', isPlayer ? 0.6 : 0.55);
@@ -142,8 +145,9 @@ export function newGame(playerLab: LabId, seed: number, hintsEnabled = false): G
 /**
  * Symmetric tournament game for the balance harness: four IDENTICAL US labs
  * (same start cap, fleet, cash, trust, full C-suite, two stars), one strategy
- * per seat, no blocking events, no player special-casing. Strategy performance
- * measured here is free of the deliberate starting imbalance of the real game.
+ * per seat, no player special-casing. Every seat gets events and the gov
+ * ladder, auto-answered by its strategy — the same world a human plays, minus
+ * the deliberate starting imbalance of the real game.
  */
 export function newTournamentGame(seed: number, strategies: string[]): GameState {
   const rng = makeRng(seed);
@@ -192,14 +196,11 @@ function makeState(rng: RngState, playerLab: LabId, labs: Record<LabId, Lab>, hi
       algoProgress: 1,
     },
     diplomacy: { completed: [], brokeredBy: {}, cooldowns: {} },
-    govLadder: { rung: 0, crackdown: 0, rejectedUntil: 0, lastWeek: 0, done: [] },
     feed: [],
     pendingEvents: [],
     history: [],
     gameOver: null,
-    eventCooldowns: {},
     feedCounter: 0,
-    weeksSinceEvent: 0,
     hintsEnabled,
   };
   // seed the P&L fields so the header shows real numbers before the first tick

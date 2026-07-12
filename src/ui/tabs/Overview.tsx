@@ -8,27 +8,31 @@ import { fmtCompact, fmtFlop, fmtMoney, fmtWeeks } from '../format';
 import { Icon } from '../icons';
 import { ResearchIcon } from '../researchIcons';
 import { ComputePanel } from '../ComputePanel';
-import { BuyComputePanel, EnterprisePanel, FundraisingPanel, PricingPanel } from '../FinancePanels';
+import { BuyComputePanel, EnterprisePanel, FundraisingPanel, PnlPanel, PricingPanel } from '../FinancePanels';
 import { useGame, useSt } from '../useGame';
 
 export function OverviewTab() {
   return (
     <div className="hub2">
+      {/* left — finance: the buttons you work every week, then the P&L they feed */}
       <div className="col">
-        <FlagshipPanel />
-        <PricingPanel compact />
         <EnterprisePanel compact />
+        <PricingPanel compact />
         <FundraisingPanel compact />
+        <PnlPanel />
       </div>
 
+      {/* middle — the flagship, then what to do with it */}
+      <div className="col">
+        <FlagshipPanel />
+        <NextMovesPanel />
+        <CommitmentsPanel />
+      </div>
+
+      {/* right — compute */}
       <div className="col">
         <ComputePanel />
         <BuyComputePanel />
-      </div>
-
-      <div className="col">
-        <NextMovesPanel />
-        <CommitmentsPanel />
       </div>
     </div>
   );
@@ -97,6 +101,9 @@ function FlagshipPanel() {
                 {blocked ?? `Start post-training — ${fmtMoney(cost)}`}
               </button>
             </div>
+            <button className="deeplink" style={{ marginTop: 8 }} onClick={() => game.goTab('models')}>
+              Start a new training run →
+            </button>
           </>
         ) : (
           <>

@@ -164,6 +164,7 @@ describe('event responses', () => {
     const state = newGame('helios', 1);
     state.pendingEvents.push({
       eventId: 'eu-usb-c',
+      labId: 'helios',
       week: state.week,
       title: 'EU mandates USB-C on datacenters',
       body: '...',
