@@ -125,10 +125,12 @@ export function finishTrainingRun(lab: Lab, run: TrainingRun, week: number, algo
   if (lab.research.completed.includes('instruction-tuning')) align = clamp100(align + 2);
   if (lab.research.completed.includes('neuralese')) align = clamp100(align - 8);
   if (lab.research.completed.includes('arch-redesign')) align = clamp100(align - 8);
-  // weak-to-strong: the bigger the capability jump over the last flagship, the more alignment carries across
+  // weak-to-strong: a flat alignment boost carried into every new model. NOT scaled
+  // by the capability jump — scaling it rewarded forcing the largest possible jumps
+  // (a +30 megaRun maxed the bonus), which inverts the intent. Now it's a steady
+  // per-model bump like constitutional/honesty, independent of how far you jumped.
   if (lab.research.completed.includes('weak-to-strong')) {
-    const jump = Math.max(0, cap - (prev ? prev.capability : 0));
-    align = clamp100(align + Math.min(BAL.WEAK_TO_STRONG_MAX, jump * BAL.WEAK_TO_STRONG_PER_JUMP));
+    align = clamp100(align + BAL.WEAK_TO_STRONG_ALIGN_BONUS);
   }
 
   const m: Model = {

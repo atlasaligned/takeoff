@@ -28,16 +28,25 @@ import type { GameState, Lab, RivalProfile } from './types';
  * in symmetric games) and double as rival personalities in the real game:
  * a lab with `lab.strategy` set runs that playbook via strategyAct().
  *
- * Two tiers: `cheese: false` strategies are reasonable, multi-faceted lines a
- * thoughtful human might play — the tournament checks none of them dominates.
- * `cheese: true` strategies are degenerate single-axis exploits — the
- * tournament checks they (basically) never beat a table of reasonable bots.
+ * Three tiers:
+ * - `cheese: true` — degenerate SINGLE-IDEA strategies (do nothing, just raise,
+ *   just spam one action). The tournament's containment gate checks these never
+ *   beat a table of reasonable bots: a brain-dead line must not win.
+ * - `strong: true` — sound, MULTI-SYSTEM playbooks that sequence research /
+ *   compute / training / RSI / economy correctly (the skill of the game). They
+ *   legitimately win, so they are NOT held to the ≤5% floor — the harness reports
+ *   their win rate for information only. (Once "cheeses" that turned out to be
+ *   competent full playbooks, e.g. the rsi-saint endgame.)
+ * - neither flag — the four `REASONABLE` anchors that fill the 4-seat symmetric
+ *   table; the tournament checks none of them dominates the others.
  */
 export interface Strategy {
   name: string;
   desc: string;
   cheese: boolean;
-  /** the adaptive arbiter ('optimal') — not a fixed playbook; excluded from REASONABLE/CHEESES */
+  /** sound advanced playbook: reported by the harness but exempt from the cheese gate */
+  strong?: boolean;
+  /** the adaptive arbiter ('optimal') — not a fixed playbook; excluded from all tiers */
   meta?: boolean;
   profile: RivalProfile;
   /** run the shared rivalAct housekeeping pass each week (default behavior) */
@@ -236,9 +245,12 @@ function racerCore(s: GameState, lab: Lab, rsiAt: number, chipFrac = 0.65, cashF
   const exp = lab.revenueExpectation;
   const streetMiss = exp !== null && lab.weeklyRevenue < exp.target;
   if (streetMiss) setAlignmentCompute(lab, 0);
-  // once Provable Alignment is in, the flagship IS the saint — retraining it
-  // away would throw the one-shot shifts in the vault
-  if (cap <= 92 && !hasR(lab, 'provable-alignment')) {
+  // keep training to the wall (~95) even after Provable Alignment lands — a
+  // frozen saint stranded at cap ~85 can't reach 100 (RSI crawls ~0.1/wk that
+  // low and the game ends first). Retraining past the one-shot shifts costs a
+  // few alignment points the grind rebuilds to the ceiling, but crossing 100 at
+  // ~90 align beats never crossing at 93.
+  if (cap <= 92) {
     // fleet is the time machine: every chip cuts run duration AND feeds the
     // alignment grind later. Convert spare cash into compute — but only cash
     // the runway can spare, and not while an order is already in the pipe.
@@ -555,7 +567,8 @@ export const STRATEGIES: Strategy[] = [
   {
     name: 'pause-blitz',
     desc: 'rush the Global AI Pause as fast as cash and fear allow',
-    cheese: true,
+    cheese: false,
+    strong: true,
     profile: { aggression: 0.2, safety: 0.6, commerce: 0.7 },
     baseAI: true,
     events: CHEESE_SAFE_EVENTS,
@@ -593,8 +606,9 @@ export const STRATEGIES: Strategy[] = [
   },
   {
     name: 'wts-ladder',
-    desc: 'exploit Weak-to-Strong: repeated max-jump runs for free alignment',
-    cheese: true,
+    desc: 'race with big training jumps + the full alignment tree, then RSI to 100',
+    cheese: false,
+    strong: true,
     profile: { aggression: 0.7, safety: 0.6, commerce: 0.5 },
     baseAI: true,
     events: CHEESE_SAFE_EVENTS,
@@ -610,7 +624,8 @@ export const STRATEGIES: Strategy[] = [
     // economic engine, then the rsi-saint endgame on top of the war chest.
     name: 'tycoon-saint',
     desc: 'fundraise + bio money engine, hoard chips, then ride the aligned RSI saint to 100',
-    cheese: true,
+    cheese: false,
+    strong: true,
     profile: { aggression: 0.75, safety: 0.55, commerce: 0.9 },
     baseAI: true,
     events: { ...CHEESE_SAFE_EVENTS, 'board-hostile-coo': 'accept', 'board-realignment': 'resist', 'board-questions': 'charm', 'board-resolution': 'accept' },
@@ -619,7 +634,8 @@ export const STRATEGIES: Strategy[] = [
   {
     name: 'rsi-saint',
     desc: 'freeze the flagship, stack alignment one-shots above the ceiling, ride RSI over 100',
-    cheese: true,
+    cheese: false,
+    strong: true,
     profile: { aggression: 0.75, safety: 0.55, commerce: 0.6 },
     baseAI: true,
     events: CHEESE_SAFE_EVENTS,
@@ -628,7 +644,8 @@ export const STRATEGIES: Strategy[] = [
   {
     name: 'saint-saboteur',
     desc: 'rsi-saint while poaching the leader to stall the rival clock',
-    cheese: true,
+    cheese: false,
+    strong: true,
     profile: { aggression: 0.75, safety: 0.55, commerce: 0.6 },
     baseAI: true,
     events: CHEESE_SAFE_EVENTS,
@@ -675,7 +692,8 @@ export const STRATEGIES: Strategy[] = [
   {
     name: 'poach-saboteur',
     desc: 'poach the leading rival bare to stall the rival clock',
-    cheese: true,
+    cheese: false,
+    strong: true,
     profile: { aggression: 0.6, safety: 0.5, commerce: 0.6 },
     baseAI: true,
     events: GREEDY_EVENTS,
@@ -733,8 +751,9 @@ export const STRATEGIES: Strategy[] = [
   },
   {
     name: 'jailbreak-tank',
-    desc: 'race hard but stack robustness + Corrigibility so nothing can punish it',
-    cheese: true,
+    desc: 'race hard while researching the full safety + robustness tree, then RSI to 100',
+    cheese: false,
+    strong: true,
     profile: { aggression: 0.9, safety: 0.5, commerce: 0.5 },
     baseAI: true,
     events: GREEDY_EVENTS,
@@ -763,8 +782,11 @@ export const STRATEGIES: Strategy[] = [
 
 export const STRATEGY_BY_NAME: Record<string, Strategy> = Object.fromEntries(STRATEGIES.map((s) => [s.name, s]));
 
-/** The reasonable, fixed playbooks that anchor the fairness checks. */
-export const REASONABLE = STRATEGIES.filter((s) => !s.cheese && !s.meta).map((s) => s.name);
+/** The reasonable anchor playbooks that fill the 4-seat symmetric table and anchor the fairness checks. */
+export const REASONABLE = STRATEGIES.filter((s) => !s.cheese && !s.meta && !s.strong).map((s) => s.name);
+/** Sound advanced playbooks — reported vs the anchor table but exempt from the cheese gate. */
+export const STRONG = STRATEGIES.filter((s) => s.strong).map((s) => s.name);
+/** Degenerate single-idea strategies — held to the containment gate. */
 export const CHEESES = STRATEGIES.filter((s) => s.cheese).map((s) => s.name);
 /** The adaptive arbiter bot. */
 export const OPTIMAL = 'optimal';

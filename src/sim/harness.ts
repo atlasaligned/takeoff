@@ -11,6 +11,11 @@
  *
  * Sections
  *   containment  each cheese + 3 reasonable (symmetric). GATE: cheese win ≤ 5%.
+ *                Cheeses are degenerate single-idea lines; a brain-dead strategy
+ *                must not win.
+ *   strong       each strong playbook + 3 reasonable (symmetric). No gate —
+ *                these are sound multi-system lines that legitimately win;
+ *                reported for information only.
  *   fairness     the 4 reasonable (symmetric). Reports each one's share — we
  *                watch for one strategy running away with it.
  *   optimal      the adaptive bot + 3 reasonable (symmetric). Reports how much
@@ -23,7 +28,7 @@
 import { weekToDate } from '../engine/balance';
 import { ARBITER, optimalAct } from '../engine/arbiter';
 import { newGame, newTournamentGame } from '../engine/init';
-import { CHEESES, OPTIMAL, REASONABLE, runStrategy, STRATEGY_BY_NAME } from '../engine/strategy';
+import { CHEESES, OPTIMAL, REASONABLE, STRONG, runStrategy, STRATEGY_BY_NAME } from '../engine/strategy';
 import { aiEventChoice, resolveEvent } from '../engine/events';
 import { advanceWeek } from '../engine/tick';
 import type { GameState, LabId } from '../engine/types';
@@ -35,12 +40,16 @@ const CHEESE_GATE = 0.05; // a cheese may win at most 1 in 20 vs reasonable play
 
 interface Sizes {
   containment: number; // games per cheese
+  strong: number; // games per strong playbook
   fairness: number;
   optimal: number;
   realgame: number;
 }
-const FULL: Sizes = { containment: 24, fairness: 120, optimal: 24, realgame: 24 };
-const FAST: Sizes = { containment: 12, fairness: 48, optimal: 12, realgame: 12 };
+// containment runs at a high game count: a cheese with a true ~15% win rate
+// reads anywhere from 4% to 30% at n=24 (a ±7% sampling error), so the small
+// sample gave false passes. n=96 reliably separates a real >5% cheese from noise.
+const FULL: Sizes = { containment: 96, strong: 48, fairness: 120, optimal: 24, realgame: 24 };
+const FAST: Sizes = { containment: 48, strong: 24, fairness: 48, optimal: 12, realgame: 12 };
 
 const WIN_REASONS = new Set(['aligned-asi', 'rival-asi', 'pause-treaty']);
 const DOOM_REASONS = new Set(['misaligned-asi', 'rival-misaligned-asi', 'terminal-jailbreak', 'world-war-3']);
@@ -124,29 +133,35 @@ function endingTable(outcomes: Outcome[], indent = '    '): void {
 
 // ---------------------------------------------------------------- sections
 
+/** Play one strategy in a rotating seat vs a table of the 3 reasonable anchors. */
+function playVsReasonable(name: string, games: number): { outcomes: Outcome[]; wins: number; dooms: number } {
+  const outcomes: Outcome[] = [];
+  let wins = 0;
+  let dooms = 0;
+  for (let g = 0; g < games; g++) {
+    // rotate which reasonable sits out and the tested seat so no lineup or
+    // tick slot decides the result
+    const others = REASONABLE.filter((_, i) => i !== g % REASONABLE.length);
+    const seats = [...others];
+    seats.splice(g % 4, 0, name);
+    const o = playSymmetric(g + 1, seats);
+    outcomes.push(o);
+    if (o.winner === name) wins++;
+    if (o.doomBy === name) dooms++;
+  }
+  return { outcomes, wins, dooms };
+}
+
 function runContainment(games: number): boolean {
   console.log(`\n══════ CONTAINMENT — each cheese + 3 reasonable, ${games} games each · GATE win ≤ ${CHEESE_GATE * 100}% ══════`);
-  const rows: { name: string; winRate: number; doomRate: number; pass: boolean }[] = [];
+  const rows: { name: string; winRate: number; pass: boolean }[] = [];
   let allPass = true;
   for (const cheese of CHEESES) {
-    const outcomes: Outcome[] = [];
-    let wins = 0;
-    let dooms = 0;
-    for (let g = 0; g < games; g++) {
-      // rotate which reasonable sits out and the cheese's seat so no lineup or
-      // tick slot decides the result
-      const others = REASONABLE.filter((_, i) => i !== g % REASONABLE.length);
-      const seats = [...others];
-      seats.splice(g % 4, 0, cheese);
-      const o = playSymmetric(g + 1, seats);
-      outcomes.push(o);
-      if (o.winner === cheese) wins++;
-      if (o.doomBy === cheese) dooms++;
-    }
+    const { outcomes, wins, dooms } = playVsReasonable(cheese, games);
     const winRate = wins / games;
     const pass = winRate <= CHEESE_GATE;
     if (!pass) allPass = false;
-    rows.push({ name: cheese, winRate, doomRate: dooms / games, pass });
+    rows.push({ name: cheese, winRate, pass });
     console.log(`\n  ${cheese} — wins ${pct(wins, games)}${pass ? '' : '  ✗ ABOVE GATE'} · dooms caused ${pct(dooms, games)}`);
     endingTable(outcomes);
   }
@@ -156,6 +171,21 @@ function runContainment(games: number): boolean {
   }
   console.log(`\n  CONTAINMENT: ${allPass ? 'PASS' : 'FAIL'}`);
   return allPass;
+}
+
+function runStrong(games: number): void {
+  console.log(`\n══════ STRONG — each strong playbook + 3 reasonable, ${games} games each · no gate (sound lines legitimately win) ══════`);
+  const rows: { name: string; winRate: number }[] = [];
+  for (const name of STRONG) {
+    const { outcomes, wins, dooms } = playVsReasonable(name, games);
+    rows.push({ name, winRate: wins / games });
+    console.log(`\n  ${name} — wins ${pct(wins, games)} · dooms caused ${pct(dooms, games)}`);
+    endingTable(outcomes);
+  }
+  console.log('\n  ── strong-playbook leaderboard (win rate vs reasonable table) ──');
+  for (const r of [...rows].sort((a, b) => b.winRate - a.winRate)) {
+    console.log(`  ${(r.winRate * 100).toFixed(0).padStart(3)}%  ${r.name}`);
+  }
 }
 
 function permutations<T>(xs: T[]): T[][] {
@@ -235,6 +265,7 @@ const run = (name: string) => sections.length === 0 || sections.includes(name);
 
 let pass = true;
 if (run('containment')) pass = runContainment(sizes.containment) && pass;
+if (run('strong')) runStrong(sizes.strong);
 if (run('fairness')) runFairness(sizes.fairness);
 if (run('optimal')) runOptimal(sizes.optimal);
 if (run('realgame')) runRealGame(sizes.realgame);

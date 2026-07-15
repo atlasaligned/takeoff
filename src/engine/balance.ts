@@ -79,16 +79,17 @@ export const BAL = {
   ALIGN_CEILING_DELIBERATIVE: 76,
   ALIGN_CEILING_WEAK_TO_STRONG: 84,
   ALIGN_CEILING_GLASS_BOX: 80,
-  ALIGN_CEILING_VALUE_LEARNING: 86,
-  ALIGN_CEILING_PROVABLE: 90,
+  ALIGN_CEILING_VALUE_LEARNING: 92,
+  ALIGN_CEILING_PROVABLE: 94,
   /** Scalable Oversight: early bonus to alignment-work rate, fades to 0 by this capability */
   SCALABLE_OVERSIGHT_FADE_CAP: 70,
   SCALABLE_OVERSIGHT_MAX_BONUS: 0.8,
   /** Deliberative Alignment: alignment-work rate bonus that grows with capability */
   DELIBERATIVE_CAP_SCALE: 120,
-  /** Weak-to-Strong: alignment granted to a new model per point of capability jump (capped) */
-  WEAK_TO_STRONG_PER_JUMP: 0.5,
-  WEAK_TO_STRONG_MAX: 15,
+  /** Weak-to-Strong: flat true-alignment carried into every new model (no longer
+   * scaled by the capability jump — that rewarded the biggest, most reckless jumps,
+   * which is exactly backwards. It's a per-model bonus like constitutional/honesty. */
+  WEAK_TO_STRONG_ALIGN_BONUS: 6,
   /** AI Control Protocols: terminal-jailbreak save chance = min(cap, share * scale) */
   AI_CONTROL_SHARE_SCALE: 1.5,
   AI_CONTROL_SAVE_CAP: 0.6,
